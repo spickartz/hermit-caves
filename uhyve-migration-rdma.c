@@ -43,7 +43,7 @@
 
 
 #ifdef __RDMA_MIGRATION__
-#define IB_USE_ODP 		(0)
+#define IB_USE_ODP 		(1)
 
 #define IB_CQ_ENTRIES 		(1)
 #define IB_MAX_INLINE_DATA 	(0)
@@ -254,9 +254,11 @@ init_com_hndl(size_t mem_chunk_cnt, mem_chunk_t *mem_chunks)
 	com_hndl.mrs = (struct ibv_mr**)malloc(sizeof(struct ibv_mr*)*com_hndl.mr_cnt);
 
 	int access_flags = (IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
-	if ((IB_USE_ODP) &&
-	    (com_hndl.dev_attr_ex.odp_caps.general_caps & IBV_ODP_SUPPORT) &&
-	    (com_hndl.dev_attr_ex.odp_caps.per_transport_caps.rc_odp_caps & IBV_ODP_SUPPORT_WRITE)) {
+// 	TODO: check ODP support via capability mask
+//	if ((IB_USE_ODP) &&
+//	    (com_hndl.dev_attr_ex.odp_caps.general_caps & IBV_ODP_SUPPORT) &&
+//	    (com_hndl.dev_attr_ex.odp_caps.per_transport_caps.rc_odp_caps & IBV_ODP_SUPPORT_WRITE)) {
+	if (IB_USE_ODP) {
 		access_flags |= IBV_ACCESS_ON_DEMAND;
 	}
 
