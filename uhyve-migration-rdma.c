@@ -636,7 +636,7 @@ create_send_list_entry (void *addr, size_t addr_size, void *page, size_t page_si
 		send_list_last = send_list_last->next;
 	}
 	/* we have to request a CQE if max_send_wr is reached to avoid overflows */
-	if ((++send_list_length%com_hndl.dev_attr_ex.orig_attr.max_qp_wr) == 0) {
+	if ((++send_list_length%IB_MAX_SEND_WR) == 0) {
 		send_list_last->send_flags 	= IBV_SEND_SIGNALED;
 	}
 }
