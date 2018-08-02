@@ -45,7 +45,9 @@
 
 #ifdef __RDMA_MIGRATION__
 
-#define IB_CQ_ENTRIES 		(1)
+#define IB_MAX_QPS 		(1)
+#define IB_CTRL_QP 		(0)
+#define IB_CQ_ENTRIES 		(IB_MAX_QPS) // TODO: One CQ entry per QP?
 #define IB_MAX_INLINE_DATA 	(0)
 #define IB_MAX_DEST_RD_ATOMIC 	(1)
 #define IB_MIN_RNR_TIMER 	(1)
@@ -66,7 +68,7 @@ typedef enum ib_wr_ids {
 uint64_t cur_wr_id = IB_WR_BASE_ID;
 
 typedef struct qp_info {
-	uint32_t qpn;
+	uint32_t qpns[IB_MAX_QPS];
 	uint16_t lid;
 	uint16_t psn;
 	uint32_t *keys;
@@ -80,7 +82,7 @@ typedef struct com_hndl {
 	struct ibv_pd 			*pd;  		/* protection domain */
 	struct ibv_mr 			**mrs; 		/* memory regions */
 	struct ibv_cq 			*cq;  		/* completion queue */
-	struct ibv_qp 			*qp;  		/* queue pair */
+	struct ibv_qp 			**qps; 		/* queue pair */
 	struct ibv_comp_channel		*comp_chan;  	/* comp. event channel */
 	qp_info_t 			loc_qp_info;
 	qp_info_t 			rem_qp_info;
@@ -91,9 +93,12 @@ typedef struct com_hndl {
 
 
 static com_hndl_t com_hndl;
-static struct ibv_send_wr *send_list = NULL;
-static struct ibv_send_wr *send_list_last = NULL;
-static size_t send_list_length = 0;
+
+/* manage one send list per QP */
+static struct ibv_send_wr *send_list[IB_MAX_QPS] = NULL;
+static struct ibv_send_wr *send_list_last[IB_MAX_QPS] = NULL;
+static size_t send_list_length[IB_MAX_QPS] = 0;
+static size_t cur_send_list = 0;
 
 /**
  * \brief Prints info of a send_wr
@@ -101,9 +106,9 @@ static size_t send_list_length = 0;
  * \param id the ID of the send_wr
  */
 static inline
-void print_send_wr_info(uint64_t id)
+void print_send_wr_info(uint64_t id, uint32_t send_list_num)
 {
-	struct ibv_send_wr *search_wr = send_list;
+	struct ibv_send_wr *search_wr = send_list[send_list_num];
 
 	/* find send_wr with id */
 	while(search_wr) {
@@ -309,7 +314,8 @@ init_com_hndl(size_t mem_chunk_cnt, mem_chunk_t *mem_chunks, bool sender)
 		exit(EXIT_FAILURE);
 	}
 
-	/* create send and recv queue pair  and initialize it */
+	/* create send and recv queue pairs  and initialize then */
+	com_hndl.qps = (struct ibv_qp **)malloc(sizeof(struct ibv_qp *)*IB_MAX_QPS);
 	struct ibv_qp_init_attr init_attr = {
 		.send_cq = com_hndl.cq,
 		.recv_cq = com_hndl.cq,
@@ -323,37 +329,41 @@ init_com_hndl(size_t mem_chunk_cnt, mem_chunk_t *mem_chunks, bool sender)
 		.qp_type = IBV_QPT_RC,
 		.sq_sig_all = 0 /* we do not want a CQE for each WR */
 	};
-	if ((com_hndl.qp = ibv_create_qp(com_hndl.pd, &init_attr)) == NULL) {
-		fprintf(stderr,
-			"[ERROR] Could not create the queue pair "
-			"- %d (%s). Abort!\n",
-			errno,
-			strerror(errno));
-		exit(EXIT_FAILURE);
+	for (i=0; i<IB_MAX_QPS; ++i) {
+		if ((com_hndl.qps[i] = ibv_create_qp(com_hndl.pd, &init_attr)) == NULL) {
+			fprintf(stderr,
+				"[ERROR] Could not create the queue pair "
+				"- %d (%s). Abort!\n",
+				errno,
+				strerror(errno));
+			exit(EXIT_FAILURE);
+		}
+
+		struct ibv_qp_attr attr = {
+			.qp_state   		= IBV_QPS_INIT,
+			.pkey_index 		= 0,
+			.port_num 		= com_hndl.used_port,
+			.qp_access_flags 	= (IBV_ACCESS_REMOTE_WRITE)
+		};
+		if (ibv_modify_qp(com_hndl.qps[i],
+				  &attr,
+				  IBV_QP_STATE |
+				  IBV_QP_PKEY_INDEX |
+				  IBV_QP_PORT |
+				  IBV_QP_ACCESS_FLAGS) < 0) {
+			fprintf(stderr,
+				"[ERROR] Could not set QP into init state "
+				"- %d (%s). Abort!\n",
+				errno,
+				strerror(errno));
+			exit(EXIT_FAILURE);
+		}
+
+		/* fill in local qp_info for this QP */
+		com_hndl.loc_qp_info.qpns[i] 	= com_hndl.qps[i]->qp_num;
 	}
 
-	struct ibv_qp_attr attr = {
-		.qp_state   		= IBV_QPS_INIT,
-		.pkey_index 		= 0,
-		.port_num 		= com_hndl.used_port,
-		.qp_access_flags 	= (IBV_ACCESS_REMOTE_WRITE)
-	};
-	if (ibv_modify_qp(com_hndl.qp,
-			  &attr,
-			  IBV_QP_STATE |
-			  IBV_QP_PKEY_INDEX |
-			  IBV_QP_PORT |
-			  IBV_QP_ACCESS_FLAGS) < 0) {
-		fprintf(stderr,
-			"[ERROR] Could not set QP into init state "
-			"- %d (%s). Abort!\n",
-			errno,
-			strerror(errno));
-		exit(EXIT_FAILURE);
-	}
-
-	/* fill in local qp_info */
-	com_hndl.loc_qp_info.qpn 	= com_hndl.qp->qp_num;
+	/* fill in genereric local qp_info */
 	com_hndl.loc_qp_info.psn 	= lrand48() & 0xffffff;
 	com_hndl.loc_qp_info.addr 	= (uint64_t)com_hndl.buf;
 	com_hndl.loc_qp_info.lid 	= com_hndl.port_attr.lid;
@@ -372,13 +382,16 @@ init_com_hndl(size_t mem_chunk_cnt, mem_chunk_t *mem_chunks, bool sender)
 static void
 destroy_com_hndl(void)
 {
-	if (ibv_destroy_qp(com_hndl.qp) < 0) {
-		fprintf(stderr,
-			"[ERROR] Could not destroy the queue pair "
-			"- %d (%s). Abort!\n",
-			errno,
-			strerror(errno));
-		exit(EXIT_FAILURE);
+	int i;
+	for (i=0; i<IB_MAX_QPS; ++i) {
+		if (ibv_destroy_qp(com_hndl.qps[i]) < 0) {
+			fprintf(stderr,
+				"[ERROR] Could not destroy the queue pair "
+				"- %d (%s). Abort!\n",
+				errno,
+				strerror(errno));
+			exit(EXIT_FAILURE);
+		}
 	}
 
 	if (ibv_destroy_cq(com_hndl.cq) < 0) {
@@ -450,59 +463,64 @@ destroy_com_hndl(void)
  */
 static void
 con_com_buf(void) {
-	/* transistion to ready-to-receive state */
-	struct ibv_qp_attr qp_attr = {
-		.qp_state 		= IBV_QPS_RTR,
-		.path_mtu 		= IBV_MTU_2048,
-		.dest_qp_num 		= com_hndl.rem_qp_info.qpn,
-		.rq_psn			= com_hndl.rem_qp_info.psn,
-		.max_dest_rd_atomic	= IB_MAX_DEST_RD_ATOMIC,
-		.min_rnr_timer		= IB_MIN_RNR_TIMER,
-		.ah_attr 		= {
-			.is_global 	= 0,
-			.sl 		= 0,
-			.src_path_bits 	= 0,
-			.dlid 		= com_hndl.rem_qp_info.lid,
-			.port_num 	= com_hndl.used_port,
+	int i;
+	for (i=0; i<IB_MAX_QPS; ++i) {
+		/* transistion to ready-to-receive state */
+		struct ibv_qp_attr qp_attr = {
+			.qp_state 		= IBV_QPS_RTR,
+			.path_mtu 		= IBV_MTU_2048,
+			.dest_qp_num 		= com_hndl.rem_qp_info.qpns[i],
+			.rq_psn			= com_hndl.rem_qp_info.psn,
+			.max_dest_rd_atomic	= IB_MAX_DEST_RD_ATOMIC,
+			.min_rnr_timer		= IB_MIN_RNR_TIMER,
+			.ah_attr 		= {
+				.is_global 	= 0,
+				.sl 		= 0,
+				.src_path_bits 	= 0,
+				.dlid 		= com_hndl.rem_qp_info.lid,
+				.port_num 	= com_hndl.used_port,
+			}
+		};
+		if (ibv_modify_qp(com_hndl.qps[i],
+				  &qp_attr,
+				  IBV_QP_STATE |
+				  IBV_QP_PATH_MTU |
+				  IBV_QP_DEST_QPN |
+				  IBV_QP_RQ_PSN |
+				  IBV_QP_MAX_DEST_RD_ATOMIC |
+				  IBV_QP_MIN_RNR_TIMER |
+				  IBV_QP_AV)) {
+			fprintf(stderr,
+				"[ERROR] Could not put QP #%d into RTR state"
+				"- %d (%s). Abort!\n",
+				i,
+				errno,
+				strerror(errno));
+			exit(errno);
 		}
-	};
-	if (ibv_modify_qp(com_hndl.qp,
-			  &qp_attr,
-			  IBV_QP_STATE |
-			  IBV_QP_PATH_MTU |
-			  IBV_QP_DEST_QPN |
-			  IBV_QP_RQ_PSN |
-			  IBV_QP_MAX_DEST_RD_ATOMIC |
-			  IBV_QP_MIN_RNR_TIMER |
-			  IBV_QP_AV)) {
-		fprintf(stderr,
-			"[ERROR] Could not put QP into RTR state"
-			"- %d (%s). Abort!\n",
-			errno,
-			strerror(errno));
-		exit(errno);
-	}
 
-	/* transistion to ready-to-send state */
-	qp_attr.qp_state    	= IBV_QPS_RTS;
-	qp_attr.timeout	    	= 14;
-	qp_attr.retry_cnt   	= 7;
-	qp_attr.rnr_retry   	= 7; /* infinite retrys on RNR NACK */
-	qp_attr.sq_psn	    	= com_hndl.loc_qp_info.psn;
-	qp_attr.max_rd_atomic 	= 1;
-	if (ibv_modify_qp(com_hndl.qp, &qp_attr,
-			  IBV_QP_STATE              |
-			  IBV_QP_TIMEOUT            |
-			  IBV_QP_RETRY_CNT          |
-			  IBV_QP_RNR_RETRY          |
-			  IBV_QP_SQ_PSN             |
-			  IBV_QP_MAX_QP_RD_ATOMIC)) {
-		fprintf(stderr,
-			"[ERROR] Could not put QP into RTS state"
-			"- %d (%s). Abort!\n",
-			errno,
-			strerror(errno));
-		exit(errno);
+		/* transistion to ready-to-send state */
+		qp_attr.qp_state    	= IBV_QPS_RTS;
+		qp_attr.timeout	    	= 14;
+		qp_attr.retry_cnt   	= 7;
+		qp_attr.rnr_retry   	= 7; /* infinite retrys on RNR NACK */
+		qp_attr.sq_psn	    	= com_hndl.loc_qp_info.psn;
+		qp_attr.max_rd_atomic 	= 1;
+		if (ibv_modify_qp(com_hndl.qps[i], &qp_attr,
+				  IBV_QP_STATE              |
+				  IBV_QP_TIMEOUT            |
+				  IBV_QP_RETRY_CNT          |
+				  IBV_QP_RNR_RETRY          |
+				  IBV_QP_SQ_PSN             |
+				  IBV_QP_MAX_QP_RD_ATOMIC)) {
+			fprintf(stderr,
+				"[ERROR] Could not put QP #%d into RTS state"
+				"- %d (%s). Abort!\n",
+				i,
+				errno,
+				strerror(errno));
+			exit(errno);
+		}
 	}
 }
 
@@ -516,8 +534,9 @@ static void
 exchange_qp_info(bool server)
 {
 	size_t keys_size = sizeof(uint32_t)*com_hndl.mr_cnt;
-
 	int res = 0;
+	int i = 0;
+
 	if (server) {
 		/* general QP info */
 		res = recv_data(&com_hndl.rem_qp_info, sizeof(qp_info_t));
@@ -538,24 +557,43 @@ exchange_qp_info(bool server)
 		res = recv_data(com_hndl.rem_qp_info.keys, keys_size);
 	}
 
-	fprintf(stderr, "[INFO] loc_qp_info (QPN: %lu; LID: %lu; PSN: %lu; ADDR: 0x%x ",
-			com_hndl.loc_qp_info.qpn,
+	/* print generic local QP info */
+	fprintf(stderr, "[INFO] loc_qp_info (LID: %lu; PSN: %lu; ADDR: 0x%x)\n",
 			com_hndl.loc_qp_info.lid,
 			com_hndl.loc_qp_info.psn,
 			com_hndl.loc_qp_info.addr);
-	int i = 0;
+
+	/* print local QP numbers */
+	fprintf(stderr, "[INFO] QPNs (");
+	for (i=0; i<IB_MAX_QPS; ++i) {
+		fprintf(stderr, "%d -> %u; ", i, com_hndl.loc_qp_info.qpns[i]);
+	}
+	fprintf(stderr, "\b\b)\n");
+
+	/* print local keys */
+	fprintf(stderr, "[INFO] KEYs (");
 	for (i=0; i<com_hndl.mr_cnt; ++i) {
-		fprintf(stderr, "KEY[%d]: %lu; ", i, com_hndl.loc_qp_info.keys[i]);
+		fprintf(stderr, "%d -> %lu; ", i, com_hndl.loc_qp_info.keys[i]);
 	}
 	printf("\b\b)\n");
 
-	fprintf(stderr, "[INFO] rem_qp_info (QPN: %lu; LID: %lu; PSN: %lu; ADDR: 0x%x ",
-			com_hndl.rem_qp_info.qpn,
+	/* print generic remote QP info */
+	fprintf(stderr, "[INFO] rem_qp_info (LID: %lu; PSN: %lu; ADDR: 0x%x)\n",
 			com_hndl.rem_qp_info.lid,
 			com_hndl.rem_qp_info.psn,
 			com_hndl.rem_qp_info.addr);
+
+	/* print remote QP numbers */
+	fprintf(stderr, "[INFO] QPNs (");
+	for (i=0; i<IB_MAX_QPS; ++i) {
+		fprintf(stderr, "%d -> %u; ", i, com_hndl.rem_qp_info.qpns[i]);
+	}
+	fprintf(stderr, "\b\b)\n");
+
+	/* print remote keys */
+	fprintf(stderr, "[INFO] KEYs (");
 	for (i=0; i<com_hndl.mr_cnt; ++i) {
-		fprintf(stderr, "KEY[%d]: %lu; ", i, com_hndl.rem_qp_info.keys[i]);
+		fprintf(stderr, "%d -> %lu; ", i, com_hndl.rem_qp_info.keys[i]);
 	}
 	printf("\b\b)\n");
 }
@@ -593,8 +631,8 @@ prepare_send_list_elem(void)
  * \param page_size the size of the buffer
  *
  * This function creates an 'ibv_send_wr' structure and appends this to the
- * global send_list. It sets the source/destination information and sets the
- * IBV_SEND_SIGNALED flag as appropriate.
+ * global send_lists. In a round-robin fashion. It sets the source/destination
+ * information and sets the IBV_SEND_SIGNALED flag as appropriate.
  */
 static void
 create_send_list_entry (void *addr, size_t addr_size, void *page, size_t page_size)
@@ -651,16 +689,20 @@ create_send_list_entry (void *addr, size_t addr_size, void *page, size_t page_si
 	}
 
 	/* apped work request to send list */
-	if (send_list == NULL) {
-		send_list = send_list_last = send_wr;
+	if (send_list[cur_send_list] == NULL) {
+		send_list[cur_send_list] = send_list_last[cur_send_list] = send_wr;
 	} else {
-		send_list_last->next = send_wr;
-		send_list_last = send_list_last->next;
+		send_list_last[cur_send_list]->next = send_wr;
+		send_list_last[cur_send_list] = send_list_last[cur_send_list]->next;
 	}
+
 	/* we have to request a CQE if max_send_wr is reached to avoid overflows */
-	if ((++send_list_length%IB_MAX_SEND_WR) == 0) {
-		send_list_last->send_flags 	= IBV_SEND_SIGNALED;
+	if ((++send_list_length[cur_send_list]%IB_MAX_SEND_WR) == 0) {
+		send_list_last[cur_send_list]->send_flags = IBV_SEND_SIGNALED;
 	}
+
+	/* switch to next send list */
+	cur_send_list = ++cur_send_list%IB_MAX_QPS;
 }
 
 
@@ -739,32 +781,46 @@ void send_guest_mem(bool final_dump, size_t mem_chunk_cnt, mem_chunk_t *mem_chun
 	if (send_list_length == 0)
 		create_send_list_entry(NULL, 0, NULL, 0);
 
-	/* we have to wait for the last WR before informing dest */
-	if ((mig_params.dump_mode == MIG_MODE_COMPLETE_DUMP) || final_dump) {
-		send_list_last->wr_id 		= IB_WR_WRITE_LAST_PAGE_ID;
-		send_list_last->opcode 		= IBV_WR_RDMA_WRITE_WITH_IMM;
-		send_list_last->send_flags 	= IBV_SEND_SIGNALED | IBV_SEND_SOLICITED;
-		send_list_last->imm_data 	= htonl(0x1);
-	} else {
-		send_list_last->wr_id 		= IB_WR_WRITE_LAST_PAGE_ID;
-		send_list_last->send_flags 	= IBV_SEND_SIGNALED;
+	/* we have to wait for the last WRs before informing dest */
+	for (i=0; i<IB_MAX_QPS; ++i) {
+		if ((mig_params.dump_mode == MIG_MODE_COMPLETE_DUMP) || final_dump) {
+			send_list_last[i]->wr_id 	= IB_WR_WRITE_LAST_PAGE_ID;
+			send_list_last[i]->opcode 	= IBV_WR_RDMA_WRITE_WITH_IMM;
+			send_list_last[i]->send_flags 	= IBV_SEND_SIGNALED | IBV_SEND_SOLICITED;
+			send_list_last[i]->imm_data 	= htonl(0x1);
+		} else {
+			send_list_last[i]->wr_id 		= IB_WR_WRITE_LAST_PAGE_ID;
+			send_list_last[i]->send_flags 	= IBV_SEND_SIGNALED;
+		}
+
+		printf("[DEBUG] Length send list #%d: %d\n", i, send_list_length[i]);
 	}
 
-	printf("[DEBUG] Send list length %d\n", send_list_length);
 
 	/* we have to call ibv_post_send() as long as 'send_list' contains elements  */
+	uint32_t remaining_send_wrs = 0;
  	struct ibv_wc wc;
-	struct ibv_send_wr *remaining_send_wr = NULL;
+	struct ibv_send_wr *remaining_send_wr[IB_MAX_QPS] = { [0 .. IB_MAX_QPS] = NULL };
 	do {
-		/* send data */
-		remaining_send_wr = NULL;
-		if (ibv_post_send(com_hndl.qp, send_list, &remaining_send_wr) && (errno != ENOMEM)) {
-			fprintf(stderr,
-				"[ERROR] Could not post send"
-				"- %d (%s). Abort!\n",
-				errno,
-				strerror(errno));
-			exit(EXIT_FAILURE);
+		/* process all send lists */
+		for (i=0; i<IB_MAX_QPS; ++i) {
+			/* are all WRs processed on this list? */
+			if (send_list[i] == NULL)
+				continue;
+
+			/* make progress on this list */
+			remaining_send_wr[i] = NULL;
+			if (ibv_post_send(com_hndl.qp, send_list[i], &remaining_send_wr[i]) && (errno != ENOMEM)) {
+				fprintf(stderr,
+					"[ERROR] Could not post send"
+					"- %d (%s). Abort!\n",
+					errno,
+					strerror(errno));
+				exit(EXIT_FAILURE);
+			}
+
+			send_list[i] = remaining_send_wr[i];
+			remaining_send_wrs |= (send_list[i] == NULL);
 		}
 
 		/* wait for send WRs if CQ is full */
@@ -785,10 +841,9 @@ void send_guest_mem(bool final_dump, size_t mem_chunk_cnt, mem_chunk_t *mem_chun
 			    wc.status,
 			    wc.wr_id);
 
-			print_send_wr_info(wc.wr_id);
+			print_send_wr_info(wc.wr_id, 1); // TODO: set send_list_num
 		}
-		send_list = remaining_send_wr;
-	} while (remaining_send_wr);
+	} while (remaining_send_wrs);
 
 
 	/* ensure that we receive the CQE for the last page */
@@ -800,16 +855,18 @@ void send_guest_mem(bool final_dump, size_t mem_chunk_cnt, mem_chunk_t *mem_chun
 		    (int)wc.wr_id);
 	}
 
-	/* cleanup send_list */
-	struct ibv_send_wr *cur_send_wr = send_list;
-	struct ibv_send_wr *tmp_send_wr = NULL;
-	while (cur_send_wr != NULL) {
-		free(cur_send_wr->sg_list);
-		tmp_send_wr = cur_send_wr;
-		cur_send_wr = cur_send_wr->next;
-		free(tmp_send_wr);
+	/* cleanup send lists */
+	for (i=0; i<IB_MAX_QPS; ++i) {
+		struct ibv_send_wr *cur_send_wr = send_list[i];
+		struct ibv_send_wr *tmp_send_wr = NULL;
+		while (cur_send_wr != NULL) {
+			free(cur_send_wr->sg_list);
+			tmp_send_wr = cur_send_wr;
+			cur_send_wr = cur_send_wr->next;
+			free(tmp_send_wr);
+		}
+		send_list_length[i] = 0;
 	}
-	send_list_length = 0;
 
 	/* do not close the channel in a pre-dump */
 	if (!final_dump)
@@ -890,7 +947,8 @@ void recv_guest_mem(size_t mem_chunk_cnt, mem_chunk_t *mem_chunks)
 	recv_wr.sg_list    = &sg;
 	recv_wr.num_sge    = 1;
 
-	if (ibv_post_recv(com_hndl.qp, &recv_wr, &bad_wr) < 0) {
+	/* TODO: post send once all send queues are processed */
+	if (ibv_post_recv(com_hndl.qp[IB_CTRL_QP], &recv_wr, &bad_wr) < 0) {
 	    	fprintf(stderr,
 			"[ERROR] Could post recv - %d (%s). Abort!\n",
 			errno,
