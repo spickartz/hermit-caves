@@ -721,8 +721,8 @@ void send_guest_mem(bool final_dump, size_t mem_chunk_cnt, mem_chunk_t *mem_chun
 		ib_initialized = true;
 	}
 
-	/* determine migration mode */
-	switch (mig_params.mode) {
+	/* determine migration dump_mode */
+	switch (mig_params.dump_mode) {
 	case MIG_MODE_COMPLETE_DUMP:
 		enqueue_all_mrs();
 		break;
@@ -731,7 +731,7 @@ void send_guest_mem(bool final_dump, size_t mem_chunk_cnt, mem_chunk_t *mem_chun
 		determine_dirty_pages(create_send_list_entry);
 		break;
 	default:
-		fprintf(stderr, "[ERROR] Unknown migration mode. Abort!\n");
+		fprintf(stderr, "[ERROR] Unknown migration dump-mode. Abort!\n");
 		exit(EXIT_FAILURE);
 	}
 
@@ -740,7 +740,7 @@ void send_guest_mem(bool final_dump, size_t mem_chunk_cnt, mem_chunk_t *mem_chun
 		create_send_list_entry(NULL, 0, NULL, 0);
 
 	/* we have to wait for the last WR before informing dest */
-	if ((mig_params.mode == MIG_MODE_COMPLETE_DUMP) || final_dump) {
+	if ((mig_params.dump_mode == MIG_MODE_COMPLETE_DUMP) || final_dump) {
 		send_list_last->wr_id 		= IB_WR_WRITE_LAST_PAGE_ID;
 		send_list_last->opcode 		= IBV_WR_RDMA_WRITE_WITH_IMM;
 		send_list_last->send_flags 	= IBV_SEND_SIGNALED | IBV_SEND_SOLICITED;

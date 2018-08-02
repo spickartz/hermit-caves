@@ -45,12 +45,12 @@ extern uint8_t* guest_mem;
 typedef enum {
 	MIG_MODE_COMPLETE_DUMP = 0,
 	MIG_MODE_INCREMENTAL_DUMP,
-} mig_mode_t;
+} mig_dump_mode_t;
 
 const static struct {
-	mig_mode_t mig_mode;
+	mig_dump_mode_t mig_dump_mode;
 	const char *str;
-} mig_mode_conv [] = {
+} mig_dump_mode_conv [] = {
 	{MIG_MODE_COMPLETE_DUMP, "complete-dump"},
 	{MIG_MODE_INCREMENTAL_DUMP, "incremental-dump"},
 };
@@ -72,7 +72,7 @@ const static struct {
 
 typedef struct _mig_params {
 	mig_type_t type;
-	mig_mode_t mode;
+	mig_dump_mode_t dump_mode;
 	bool use_odp;
 } mig_params_t;
 

@@ -44,7 +44,7 @@ static int listen_sock = 0;
 
 mig_params_t mig_params = {
 	.type = MIG_TYPE_COLD,
-	.mode = MIG_MODE_COMPLETE_DUMP,
+	.dump_mode = MIG_MODE_COMPLETE_DUMP,
 	.use_odp = false,
 };
 
@@ -74,7 +74,7 @@ set_migration_##param(const char *mig_param_str)                               \
                                                                                \
 	if (!found_param) {                                                    \
 		/* we do not know this migration param */                      \
-		fprintf(stderr, "[ERROR] Migration ##param## '%s' not "        \
+		fprintf(stderr, "[ERROR] The migration parameter '%s' not "    \
 				"supported. Fallback to default\n",            \
 				mig_param_str);                                \
 	}                                                                      \
@@ -90,9 +90,9 @@ get_migration_##param##_str(mig_##param##_t mig_##param)                       \
 
 /* define setter for migration parameters */
 define_migration_param_setter(type)
-define_migration_param_setter(mode)
+define_migration_param_setter(dump_mode)
 define_migration_param_getter(type)
-define_migration_param_getter(mode)
+define_migration_param_getter(dump_mode)
 
 /**
  * \brief prints the migration parameters
@@ -100,11 +100,11 @@ define_migration_param_getter(mode)
 void
 print_migration_params(void)
 {
-	printf("========== MIGRATION PARAMETERS ==========\n");
-	printf("   MODE    : %s\n", get_migration_mode_str(mig_params.mode));
-	printf("   TYPE    : %s\n", get_migration_type_str(mig_params.type));
-	printf("   USE ODP : %u\n", mig_params.use_odp);
-	printf("==========================================\n");
+	printf("============ MIGRATION PARAMETERS ============\n");
+	printf("   MIGRATION TYPE : %s\n", get_migration_type_str(mig_params.type));
+	printf("   DUMP MODE      : %s\n", get_migration_dump_mode_str(mig_params.dump_mode));
+	printf("   USE ODP        : %u\n", mig_params.use_odp);
+	printf("==============================================\n");
 }
 
 /**
@@ -120,8 +120,8 @@ set_migration_params(const char *mig_param_filename)
 
 	FILE *mig_param_file = fopen(mig_param_filename, "r");
 	char tmp_str[MAX_PARAM_STR_LEN];
-	fscanf(mig_param_file, "mode: %s\n", tmp_str);
-	set_migration_mode(tmp_str);
+	fscanf(mig_param_file, "dump-mode: %s\n", tmp_str);
+	set_migration_dump_mode(tmp_str);
 	fscanf(mig_param_file, "type: %s\n", tmp_str);
 	set_migration_type(tmp_str);
 	fscanf(mig_param_file, "use-odp: %u\n", &mig_params.use_odp);
@@ -294,17 +294,17 @@ void close_migration_channel(void)
 
 
 #ifndef __RDMA_MIGRATION__
-void send_guest_mem(mig_mode_t mode, bool final_dump, size_t mem_chunk_cnt, mem_chunk_t *mem_chunks)
+void send_guest_mem(mig_dump_mode_t dump_mode, bool final_dump, size_t mem_chunk_cnt, mem_chunk_t *mem_chunks)
 {
-	/* determine migration mode */
-	switch (mode) {
+	/* determine migration dump_mode */
+	switch (dump_mode) {
 	case MIG_MODE_INCREMENTAL_DUMP:
 		fprintf(stderr, "ERROR: Incremental dumps currently not supported via TCP/IP. Fallback to complete dump!\n");
 	case MIG_MODE_COMPLETE_DUMP:
 		send_data(guest_mem, guest_size);
 		break;
 	default:
-		fprintf(stderr, "ERROR: Unknown migration mode. Abort!\n");
+		fprintf(stderr, "ERROR: Unknown migration dump-mode. Abort!\n");
 		exit(EXIT_FAILURE);
 	}
 
