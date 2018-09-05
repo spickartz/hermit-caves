@@ -338,7 +338,7 @@ void generate_mem_mappings(void)
 
 
 #ifndef __RDMA_MIGRATION__
-void send_guest_mem(bool final_dump, size_t mem_chunk_cnt, mem_chunk_t *mem_chunks)
+void send_guest_mem(bool final_dump, mem_mappings_t mem_mappings)
 {
 	/* determine migration mode */
 	switch (mig_params.mode) {
@@ -355,7 +355,7 @@ void send_guest_mem(bool final_dump, size_t mem_chunk_cnt, mem_chunk_t *mem_chun
 	fprintf(stderr, "Guest memory sent!\n");
 }
 
-void recv_guest_mem(size_t mem_chunk_cnt, mem_chunk_t *mem_chunks)
+void recv_guest_mem(mem_mappings_t mem_mappings)
 {
 	recv_data(guest_mem, guest_size);
 	fprintf(stderr, "Guest memory received!\n");

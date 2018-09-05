@@ -954,7 +954,7 @@ void *migration_handler(void *arg)
 	if (get_migration_type() == MIG_TYPE_LIVE) {
 		/* resend rounds */
 		for (i=0; i<MIG_ITERS; ++i) {
-			send_guest_mem(0, mem_mappings.count, mem_mappings.mem_chunks);
+			send_guest_mem(0, mem_mappings);
 		}
 	}
 
@@ -966,7 +966,7 @@ void *migration_handler(void *arg)
 	pthread_barrier_wait(&migration_barrier);
 
 	/* send the final dump */
-	send_guest_mem(1, mem_mappings.count, mem_mappings.mem_chunks);
+	send_guest_mem(1, mem_mappings);
 	fprintf(stderr, "Memory sent! (Guest size: %zu bytes)\n", guest_size);
 
 	/* free mem_mappings info */
@@ -1015,7 +1015,7 @@ int load_migration_data(uint8_t* mem)
 	recv_data(mem_mappings.mem_chunks, recv_bytes);
 	convert_to_host_virt(&mem_mappings);
 
-	recv_guest_mem(mem_mappings.count, mem_mappings.mem_chunks);
+	recv_guest_mem(mem_mappings);
 	free(mem_mappings.mem_chunks);
 	mem_mappings.mem_chunks = NULL;
 	mem_mappings.count = 0;

@@ -137,14 +137,14 @@ void print_send_wr_info(uint64_t id)
  * state ready to be connected with the remote side.
  */
 static void
-init_com_hndl(size_t mem_chunk_cnt, mem_chunk_t *mem_chunks, bool sender)
+init_com_hndl(mem_mappings_t mem_mappings, bool sender)
 {
 	/* initialize com_hndl */
 	memset(&com_hndl, 0, sizeof(com_hndl));
 
 	/* the guest physical memory is the communication buffer */
 	com_hndl.buf = guest_mem;
-	com_hndl.mr_cnt = mem_chunk_cnt;
+	com_hndl.mr_cnt = mem_mappings.count;
 
 	struct ibv_device **device_list = NULL;
 	int num_devices = 0;
@@ -264,15 +264,15 @@ init_com_hndl(size_t mem_chunk_cnt, mem_chunk_t *mem_chunks, bool sender)
 
 	for (i=0; i<com_hndl.mr_cnt; ++i) {
 		if ((com_hndl.mrs[i] = ibv_reg_mr(com_hndl.pd,
-						mem_chunks[i].ptr,
-						mem_chunks[i].size,
+						mem_mappings.mem_chunks[i].ptr,
+						mem_mappings.mem_chunks[i].size,
 						access_flags)) == NULL) {
 			fprintf(stderr,
 				"[ERROR] Could not register the memory region #%d (ptr: %llx; size: %llu) "
 				"- %d (%s). Abort!\n",
 				i,
-				mem_chunks[i].ptr,
-				mem_chunks[i].size,
+				mem_mappings.mem_chunks[i].ptr,
+				mem_mappings.mem_chunks[i].size,
 				errno,
 				strerror(errno));
 			exit(EXIT_FAILURE);
@@ -707,14 +707,14 @@ void enqueue_all_mrs(void)
  * \param mem_chunk_cnt number of memory chunks to be registered
  * \param mem_chunks an array of memory chunks to be registered
  */
-void send_guest_mem(bool final_dump, size_t mem_chunk_cnt, mem_chunk_t *mem_chunks)
+void send_guest_mem(bool final_dump, mem_mappings_t mem_mappings)
 {
 	int res = 0, i = 0;
 	static bool ib_initialized = false;
 
 	/* prepare IB channel */
 	if (!ib_initialized) {
-		init_com_hndl(mem_chunk_cnt, mem_chunks, true);
+		init_com_hndl(mem_mappings, true);
 		exchange_qp_info(false);
 		con_com_buf();
 
@@ -830,12 +830,12 @@ void send_guest_mem(bool final_dump, size_t mem_chunk_cnt, mem_chunk_t *mem_chun
  * The receive participates in the IB connection setup and waits for the
  * 'solicited' event sent with the last WR issued by the sender.
  */
-void recv_guest_mem(size_t mem_chunk_cnt, mem_chunk_t *mem_chunks)
+void recv_guest_mem(mem_mappings_t mem_mappings)
 {
 	int res = 0;
 
 	/* prepare IB channel */
-	init_com_hndl(mem_chunk_cnt, mem_chunks, false);
+	init_com_hndl(mem_mappings, false);
 	exchange_qp_info(true);
 	con_com_buf();
 

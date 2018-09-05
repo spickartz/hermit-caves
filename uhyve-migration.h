@@ -112,8 +112,8 @@ int send_data(void *buffer, size_t length);
 
 void generate_mem_mappings(void);
 
-void send_guest_mem(bool final_dump, size_t mem_chunk_cnt, mem_chunk_t *mem_chunks);
-void recv_guest_mem(size_t mem_chunk_cnt, mem_chunk_t *mem_chunks);
+void send_guest_mem(bool final_dump, mem_mappings_t mem_mappings);
+void recv_guest_mem(mem_mappings_t mem_mappings);
 #endif /* __UHYVE_MIGRATION_H__ */
 
 
