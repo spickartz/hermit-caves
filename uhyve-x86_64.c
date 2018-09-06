@@ -230,6 +230,7 @@ extern __thread uint32_t cpuid;
 
 extern vcpu_state_t *vcpu_thread_states;
 extern mem_mappings_t mem_mappings;
+extern mem_mappings_t guest_physical_memory;
 
 static inline void show_dtable(const char *name, struct kvm_dtable *dtable)
 {
@@ -936,25 +937,23 @@ void *migration_handler(void *arg)
 	res = send_data(&metadata, sizeof(migration_metadata_t));
       	fprintf(stderr, "Metadata sent! (%d bytes)\n", res);
 
-	/* prepare info concerning memory chunks */
-	if (get_migration_type() == MIG_TYPE_COLD) {
-		generate_mem_mappings();
-	}
-	if ((get_migration_type() == MIG_TYPE_LIVE) || (mem_mappings.count == 0)) {
-		mem_mappings.count = prepare_mem_chunk_info(&mem_mappings.mem_chunks);
-	}
+	/* determine allocated memory regions */
+	generate_mem_mappings();
 
-	/* send to destination */
-	send_data(&(mem_mappings.count), sizeof(size_t));
-	send_data(mem_mappings.mem_chunks, mem_mappings.count*sizeof(mem_chunk_t));
+	/* determine chunks of the guest physical mapping */
+	guest_physical_memory.count = prepare_mem_chunk_info(&guest_physical_memory.mem_chunks);
+
+	/* send to the destination */
+	send_mem_regions(guest_physical_memory, mem_mappings);
 
 	convert_to_host_virt(&mem_mappings);
+	convert_to_host_virt(&guest_physical_memory);
 
 	/* pre-copy phase */
 	if (get_migration_type() == MIG_TYPE_LIVE) {
 		/* resend rounds */
 		for (i=0; i<MIG_ITERS; ++i) {
-			send_guest_mem(0, mem_mappings);
+			send_guest_mem(0, guest_physical_memory, mem_mappings);
 		}
 	}
 
@@ -966,12 +965,14 @@ void *migration_handler(void *arg)
 	pthread_barrier_wait(&migration_barrier);
 
 	/* send the final dump */
-	send_guest_mem(1, mem_mappings);
+	send_guest_mem(1, guest_physical_memory, mem_mappings);
 	fprintf(stderr, "Memory sent! (Guest size: %zu bytes)\n", guest_size);
 
-	/* free mem_mappings info */
+	/* free mem_mappings and guest_physical_memory info */
 	free(mem_mappings.mem_chunks);
 	mem_mappings.count = 0;
+	free(guest_physical_memory.mem_chunks);
+	guest_physical_memory.count = 0;
 
 	/* send CPU state */
 	res = send_data(vcpu_thread_states, sizeof(vcpu_state_t)*ncores);
@@ -1006,16 +1007,13 @@ int load_migration_data(uint8_t* mem)
 
 
 	/* get memory chunk info from source and convert to host-virt */
-	mem_mappings.count = 0;
-        mem_mappings.mem_chunks = NULL;
-	recv_data(&(mem_mappings.count), sizeof(mem_mappings.count));
-
-	size_t recv_bytes = mem_mappings.count*sizeof(mem_chunk_t);
-	mem_mappings.mem_chunks = (mem_chunk_t*)malloc(recv_bytes);
-	recv_data(mem_mappings.mem_chunks, recv_bytes);
+	recv_mem_regions(&mem_mappings);
 	convert_to_host_virt(&mem_mappings);
 
+	/* receive the guest-physical memory */
 	recv_guest_mem(mem_mappings);
+
+	/* cleanup memory mappings info */
 	free(mem_mappings.mem_chunks);
 	mem_mappings.mem_chunks = NULL;
 	mem_mappings.count = 0;

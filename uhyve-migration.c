@@ -336,9 +336,45 @@ void generate_mem_mappings(void)
 	sem_wait(&mig_sem);
 }
 
+/**
+ * \brief Sends the memory regions to be registered at the destination
+ *
+ * \param guest_physical_memory chunks of the guest-physical memory
+ * \param mem_mappings allocated memory regions
+ */
+void send_mem_regions(mem_mappings_t guest_physical_memory, mem_mappings_t mem_mappings)
+{
+	/* send to destination */
+	if ((mig_params.type == MIG_TYPE_LIVE) || (mem_mappings.count == 0)) {
+		send_data(&(guest_physical_memory.count), sizeof(size_t));
+		send_data(guest_physical_memory.mem_chunks, guest_physical_memory.count*sizeof(mem_chunk_t));
+	} else {
+		send_data(&(mem_mappings.count), sizeof(size_t));
+		send_data(mem_mappings.mem_chunks, mem_mappings.count*sizeof(mem_chunk_t));
+	}
+}
+
+/**
+ * \brief Receives the memory regions to be registered at the destination
+ *
+ * \param mem_mappings memory regions to be registered
+ */
+void recv_mem_regions(mem_mappings_t *mem_mappings)
+{
+	/* receive the number of memory regions */
+	mem_mappings->count = 0;
+        mem_mappings->mem_chunks = NULL;
+	recv_data(&(mem_mappings->count), sizeof(mem_mappings->count));
+
+	/* receive the region info */
+	size_t recv_bytes = mem_mappings->count*sizeof(mem_chunk_t);
+	mem_mappings->mem_chunks = (mem_chunk_t*)malloc(recv_bytes);
+	recv_data(mem_mappings->mem_chunks, recv_bytes);
+}
+
 
 #ifndef __RDMA_MIGRATION__
-void send_guest_mem(bool final_dump, mem_mappings_t mem_mappings)
+void send_guest_mem(bool final_dump, mem_mappings_t guest_mem, mem_mappings_t mem_mappings)
 {
 	/* determine migration mode */
 	switch (mig_params.mode) {

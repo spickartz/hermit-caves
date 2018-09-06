@@ -112,7 +112,12 @@ int send_data(void *buffer, size_t length);
 
 void generate_mem_mappings(void);
 
-void send_guest_mem(bool final_dump, mem_mappings_t mem_mappings);
+void prepare_mem_region(mem_mappings_t mem_regions);
+
+void send_mem_regions(mem_mappings_t guest_physical_memory, mem_mappings_t mem_mappings);
+void recv_mem_regions(mem_mappings_t *mem_mappings);
+
+void send_guest_mem(bool final_dump, mem_mappings_t guest_mem, mem_mappings_t mem_mappings);
 void recv_guest_mem(mem_mappings_t mem_mappings);
 #endif /* __UHYVE_MIGRATION_H__ */
 

@@ -108,6 +108,7 @@ vcpu_state_t *vcpu_thread_states = NULL;
 static sigset_t   signal_mask;
 
 mem_mappings_t mem_mappings = {NULL, 0};
+mem_mappings_t guest_physical_memory = {NULL, 0};
 
 typedef struct {
 	int argc;

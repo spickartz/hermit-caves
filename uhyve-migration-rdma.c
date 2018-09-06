@@ -263,6 +263,7 @@ init_com_hndl(mem_mappings_t mem_mappings, bool sender)
 	}
 
 	for (i=0; i<com_hndl.mr_cnt; ++i) {
+		/* register memory region */
 		if ((com_hndl.mrs[i] = ibv_reg_mr(com_hndl.pd,
 						mem_mappings.mem_chunks[i].ptr,
 						mem_mappings.mem_chunks[i].size,
@@ -277,6 +278,7 @@ init_com_hndl(mem_mappings_t mem_mappings, bool sender)
 				strerror(errno));
 			exit(EXIT_FAILURE);
 		}
+
 		fprintf(stderr, "[INFO] com_hndl.mrs[%d]->addr = 0x%llx; com_hndl->mrs[%d].length = %llu\n",
 				i,
 				com_hndl.mrs[i]->addr,
@@ -507,6 +509,41 @@ con_com_buf(void) {
 }
 
 /**
+ * \brief Prefetches a given list of memory mappings
+ */
+static void
+prefetch_mem_mappings(mem_mappings_t mem_mappings)
+{
+	int i, j, ret;
+	for (i=0; i<mem_mappings.count; ++i) {
+		struct ibv_exp_prefetch_attr prefetch_attr = {
+			.flags 		= IBV_EXP_PREFETCH_WRITE_ACCESS,
+			.addr 		= mem_mappings.mem_chunks[i].ptr,
+			.length 	= mem_mappings.mem_chunks[i].size,
+			.comp_mask 	= 0,
+		};
+
+		/* find matching memory region and prefetch */
+		for (j=0; j<com_hndl.mr_cnt; ++j) {
+			if (((size_t)com_hndl.mrs[j]->addr <= (size_t)mem_mappings.mem_chunks[i].ptr) &&
+			    (((size_t)com_hndl.mrs[j]->addr+com_hndl.mrs[j]->length) > (size_t)mem_mappings.mem_chunks[i].ptr)) {
+				if ((ret = ibv_exp_prefetch_mr(com_hndl.mrs[j], &prefetch_attr)) < 0) {
+					fprintf(stderr,
+						"[WARNING] Could not prefetch within MR #%d - result %d "
+						"- %d (%s).\n",
+						i,
+						ret,
+						errno,
+						strerror(errno));
+				}
+				break;
+			}
+		}
+	}
+}
+
+
+/**
  * \brief Set the destination node for a migration
  *
  * \param ip_str a string containing the IPv4 addr of the destination
@@ -704,10 +741,10 @@ void enqueue_all_mrs(void)
  * \brief Sends the guest memory to the destination
  *
  * \param final_dump last dump of a live migration
- * \param mem_chunk_cnt number of memory chunks to be registered
- * \param mem_chunks an array of memory chunks to be registered
+ * \param guest_mem the guest physical memory
+ * \param mem_mappings the mapped memory regions
  */
-void send_guest_mem(bool final_dump, mem_mappings_t mem_mappings)
+void send_guest_mem(bool final_dump, mem_mappings_t guest_mem, mem_mappings_t mem_mappings)
 {
 	int res = 0, i = 0;
 	static bool ib_initialized = false;
@@ -829,6 +866,8 @@ void send_guest_mem(bool final_dump, mem_mappings_t mem_mappings)
  *
  * The receive participates in the IB connection setup and waits for the
  * 'solicited' event sent with the last WR issued by the sender.
+ *
+ * \param mem_mappings the memory regions regions that have to be mapped
  */
 void recv_guest_mem(mem_mappings_t mem_mappings)
 {
