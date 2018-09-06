@@ -700,6 +700,78 @@ create_send_list_entry (void *addr, size_t addr_size, void *page, size_t page_si
 	}
 }
 
+/**
+ * \brief Frees the send list
+ */
+static inline
+void cleanup_send_list(void)
+{
+	struct ibv_send_wr *cur_send_wr = send_list;
+	struct ibv_send_wr *tmp_send_wr = NULL;
+	while (cur_send_wr != NULL) {
+		free(cur_send_wr->sg_list);
+		tmp_send_wr = cur_send_wr;
+		cur_send_wr = cur_send_wr->next;
+		free(tmp_send_wr);
+	}
+	send_list_length = 0;
+}
+
+/*
+ * \brief Processes the send list by passing the send_wrs to the HCA
+ */
+static inline
+void process_send_list(void)
+{
+	/* we have to call ibv_post_send() as long as 'send_list' contains elements  */
+ 	struct ibv_wc wc;
+	struct ibv_send_wr *remaining_send_wr = NULL;
+	do {
+		/* send data */
+		remaining_send_wr = NULL;
+		if (ibv_post_send(com_hndl.qp, send_list, &remaining_send_wr) && (errno != ENOMEM)) {
+			fprintf(stderr,
+				"[ERROR] Could not post send - %d (%s). Abort!\n",
+				errno,
+				strerror(errno));
+			exit(EXIT_FAILURE);
+		}
+
+		/* wait for send WRs if CQ is full */
+		do {
+			if ((res = ibv_poll_cq(com_hndl.cq, 1, &wc)) < 0) {
+				fprintf(stderr,
+					"[ERROR] Could not poll on CQ - %d (%s). Abort!\n",
+					errno,
+					strerror(errno));
+				exit(EXIT_FAILURE);
+			}
+		} while (res < 1);
+		if (wc.status != IBV_WC_SUCCESS) {
+			fprintf(stderr,
+			    "[ERROR] WR failed status %s (%d) for wr_id %llu\n",
+			    ibv_wc_status_str(wc.status),
+			    wc.status,
+			    wc.wr_id);
+
+			print_send_wr_info(wc.wr_id);
+		}
+		send_list = remaining_send_wr;
+	} while (remaining_send_wr);
+
+
+	/* ensure that we receive the CQE for the last page */
+	if (wc.wr_id != IB_WR_WRITE_LAST_PAGE_ID) {
+		fprintf(stderr,
+		    "[ERROR] WR failed status %s (%d) for wr_id %d\n",
+		    ibv_wc_status_str(wc.status),
+		    wc.status,
+		    (int)wc.wr_id);
+	}
+
+	/* free send list */
+	cleanup_send_list();
+}
 
 /**
  * \brief Prepares a send_list containing all memory defined by com_hndl.mrs
@@ -751,7 +823,25 @@ void send_guest_mem(bool final_dump, mem_mappings_t guest_mem, mem_mappings_t me
 
 	/* prepare IB channel */
 	if (!ib_initialized) {
-		init_com_hndl(mem_mappings, true);
+		/* the live migration needs the whole guest memory to be registered */
+		if ((mig_params.type == MIG_TYPE_LIVE) || (mem_mappings.count == 0)) {
+			init_com_hndl(guest_mem, true);
+		} else {
+			init_com_hndl(mem_mappings, true);
+		}
+
+		/* prefetch allocated regions if ODP is used */
+		if (mig_params.use_odp && mig_params.prefetch) {
+			prefetch_mem_mappings(mem_mappings);
+
+			/* disable prefetching for cold/complete migration */
+			if ((mig_params.mode == MIG_MODE_COMPLETE_DUMP) ||
+				(mig_params.type == MIG_TYPE_COLD)) {
+					mig_params.prefetch = false;
+				}
+		}
+
+		/* establish the IB connection */
 		exchange_qp_info(false);
 		con_com_buf();
 
@@ -789,64 +879,7 @@ void send_guest_mem(bool final_dump, mem_mappings_t guest_mem, mem_mappings_t me
 
 	printf("[DEBUG] Send list length %d\n", send_list_length);
 
-	/* we have to call ibv_post_send() as long as 'send_list' contains elements  */
- 	struct ibv_wc wc;
-	struct ibv_send_wr *remaining_send_wr = NULL;
-	do {
-		/* send data */
-		remaining_send_wr = NULL;
-		if (ibv_post_send(com_hndl.qp, send_list, &remaining_send_wr) && (errno != ENOMEM)) {
-			fprintf(stderr,
-				"[ERROR] Could not post send"
-				"- %d (%s). Abort!\n",
-				errno,
-				strerror(errno));
-			exit(EXIT_FAILURE);
-		}
-
-		/* wait for send WRs if CQ is full */
-		do {
-			if ((res = ibv_poll_cq(com_hndl.cq, 1, &wc)) < 0) {
-				fprintf(stderr,
-					"[ERROR] Could not poll on CQ"
-					"- %d (%s). Abort!\n",
-					errno,
-					strerror(errno));
-				exit(EXIT_FAILURE);
-			}
-		} while (res < 1);
-		if (wc.status != IBV_WC_SUCCESS) {
-			fprintf(stderr,
-			    "[ERROR] WR failed status %s (%d) for wr_id %llu\n",
-			    ibv_wc_status_str(wc.status),
-			    wc.status,
-			    wc.wr_id);
-
-			print_send_wr_info(wc.wr_id);
-		}
-		send_list = remaining_send_wr;
-	} while (remaining_send_wr);
-
-
-	/* ensure that we receive the CQE for the last page */
-	if (wc.wr_id != IB_WR_WRITE_LAST_PAGE_ID) {
-		fprintf(stderr,
-		    "[ERROR] WR failed status %s (%d) for wr_id %d\n",
-		    ibv_wc_status_str(wc.status),
-		    wc.status,
-		    (int)wc.wr_id);
-	}
-
-	/* cleanup send_list */
-	struct ibv_send_wr *cur_send_wr = send_list;
-	struct ibv_send_wr *tmp_send_wr = NULL;
-	while (cur_send_wr != NULL) {
-		free(cur_send_wr->sg_list);
-		tmp_send_wr = cur_send_wr;
-		cur_send_wr = cur_send_wr->next;
-		free(tmp_send_wr);
-	}
-	send_list_length = 0;
+	process_send_list();
 
 	/* do not close the channel in a pre-dump */
 	if (!final_dump)
