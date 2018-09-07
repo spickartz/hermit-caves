@@ -738,6 +738,7 @@ void process_send_list(void)
 		}
 
 		/* wait for send WRs if CQ is full */
+		int res = 0;
 		do {
 			if ((res = ibv_poll_cq(com_hndl.cq, 1, &wc)) < 0) {
 				fprintf(stderr,
