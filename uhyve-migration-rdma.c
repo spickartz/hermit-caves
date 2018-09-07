@@ -879,15 +879,17 @@ void precopy_phase(mem_mappings_t guest_mem, mem_mappings_t mem_mappings)
 
 		/* is there anything to send? */
 		if (send_list_length != 0) {
+			/* we want a CQE for the last WR */
+			send_list_last->wr_id 		= IB_WR_WRITE_LAST_PAGE_ID;
+			send_list_last->send_flags 	= IBV_SEND_SIGNALED;
+
 			process_send_list();
 		} else {
 			break;
 		}
 
-		/* we want a CQE for the last WR */
-		send_list_last->wr_id 		= IB_WR_WRITE_LAST_PAGE_ID;
-		send_list_last->send_flags 	= IBV_SEND_SIGNALED;
 	}
+
 }
 
 
