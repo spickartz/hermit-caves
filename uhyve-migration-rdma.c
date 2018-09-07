@@ -511,6 +511,28 @@ con_com_buf(void) {
 }
 
 /**
+ * \brief Returns the index of the MR enclosing a given mem_chunk
+ */
+static inline ssize_t
+determine_enclosing_mr(void *ptr)
+{
+	size_t i = 0;
+	ssize_t res = -1;
+	for (i=0; i<com_hndl.mr_cnt; ++i) {
+		size_t cur_mr_start = (size_t)com_hndl.mrs[i]->addr;
+		size_t cur_mr_end = cur_mr_start+com_hndl.mrs[i]->length;
+		if ((cur_mr_start <= (size_t)ptr) &&
+		    (cur_mr_end > (size_t)ptr)) {
+			res = i;
+			break;
+		}
+	}
+
+	return res;
+}
+
+
+/**
  * \brief Prefetches a given list of memory mappings
  */
 static void
@@ -518,28 +540,38 @@ prefetch_mem_mappings(mem_mappings_t mem_mappings)
 {
 	int i, j, ret;
 	for (i=0; i<mem_mappings.count; ++i) {
+		void *cur_ptr = mem_mappings.mem_chunks[i].ptr;
+		size_t cur_size = mem_mappings.mem_chunks[i].size;
+
+		/* find enclosing MR
+		 * -> assumption: a mapping with always fit within an MR
+		 */
+		ssize_t mr_num = 0;
+		if (determine_enclosing_mr(cur_ptr) < 0) {
+			fprintf(stderr,
+				"[WARNING] Could not determine encloding MR "
+				"for ptr: 0x%llx size: 0x%llx.\n",
+				cur_ptr,
+				cur_size);
+			return;
+		}
+
+		/* prefetch the memory chunk */
 		struct ibv_exp_prefetch_attr prefetch_attr = {
 			.flags 		= IBV_EXP_PREFETCH_WRITE_ACCESS,
-			.addr 		= mem_mappings.mem_chunks[i].ptr,
-			.length 	= mem_mappings.mem_chunks[i].size,
+			.addr 		= cur_ptr,
+			.length 	= cur_size,
 			.comp_mask 	= 0,
 		};
-
-		/* find matching memory region and prefetch */
-		for (j=0; j<com_hndl.mr_cnt; ++j) {
-			if (((size_t)com_hndl.mrs[j]->addr <= (size_t)mem_mappings.mem_chunks[i].ptr) &&
-			    (((size_t)com_hndl.mrs[j]->addr+com_hndl.mrs[j]->length) > (size_t)mem_mappings.mem_chunks[i].ptr)) {
-				if ((ret = ibv_exp_prefetch_mr(com_hndl.mrs[j], &prefetch_attr)) < 0) {
-					fprintf(stderr,
-						"[WARNING] Could not prefetch within MR #%d - result %d "
-						"- %d (%s).\n",
-						i,
-						ret,
-						errno,
-						strerror(errno));
-				}
-				break;
-			}
+		if ((ret = ibv_exp_prefetch_mr(com_hndl.mrs[mr_num],
+						&prefetch_attr)) < 0) {
+			fprintf(stderr,
+				"[WARNING] Could not prefetch within MR #%d - "
+				"result %d - %d (%s).\n",
+				i,
+				ret,
+				errno,
+				strerror(errno));
 		}
 	}
 }
