@@ -312,7 +312,7 @@ void close_migration_channel(void)
 /**
  * \brief Generates the guest's mem_mappings based on its free list
  */
-void generate_mem_mappings(void)
+void determine_guest_allocations(void)
 {
 	/* request mem_mappings */
 	fprintf(stderr, "[INFO] Requsting guest's free list ...\n");
@@ -321,14 +321,9 @@ void generate_mem_mappings(void)
 	uint64_t event_counter = 1;
 	if (write(mig_efd, &event_counter, sizeof(event_counter)) < 0) {
 		fprintf(stderr, "[ERROR] Could not request the guest's free "
-				"list - %d (%s) - "
-				"(filedes = %d; buf = 0x%x; nbyte = %u). "
-				"Abort!\n",
+				"list - %d (%s) - Abort!\n",
 				errno,
-				strerror(errno),
-				mig_efd,
-				&event_counter,
-				sizeof(event_counter));
+				strerror(errno));
 		return;
 	}
 

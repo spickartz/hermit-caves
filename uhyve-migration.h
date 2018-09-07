@@ -110,7 +110,7 @@ void close_migration_channel(void);
 int recv_data(void *buffer, size_t length);
 int send_data(void *buffer, size_t length);
 
-void generate_mem_mappings(void);
+void determine_guest_allocations(void);
 
 void prepare_mem_region(mem_mappings_t mem_regions);
 
