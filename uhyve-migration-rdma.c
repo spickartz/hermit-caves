@@ -624,6 +624,27 @@ prepare_send_list_elem(void)
 }
 
 /**
+ * \brief Appends an 'ibv_send_wr' to the send_list
+ *
+ * \param send_wr WR to be appended to the send_list
+ */
+static inline void
+append_to_send_list(struct ibv_send_wr *send_wr)
+{
+	if (send_list == NULL) {
+		send_list = send_list_last = send_wr;
+	} else {
+		send_list_last->next = send_wr;
+		send_list_last = send_list_last->next;
+	}
+
+	/* we have to request a CQE if max_send_wr is reached to avoid overflows */
+	if ((++send_list_length%IB_MAX_SEND_WR) == 0) {
+		send_list_last->send_flags 	= IBV_SEND_SIGNALED;
+	}
+}
+
+/**
  * \brief Creates an 'ibv_send_wr' and appends it to the send_list
  *
  * \param addr the page table entry of the memory page
@@ -678,7 +699,7 @@ create_send_list_entry (void *addr, size_t addr_size, void *page, size_t page_si
 
 	/* did we find the correct memory region? */
 	if (i == com_hndl.mr_cnt) {
-		fprintf(stderr, "[ERROR] Could not find a valid MR for address 0x%llx!\n", page);
+		fprintf(stderr, "[ERROR] Could not find a valid MR for address 0x%llx! (send_list_length = %llu)\n", page, send_list_length);
 		return;
 	}
 
@@ -690,16 +711,7 @@ create_send_list_entry (void *addr, size_t addr_size, void *page, size_t page_si
 	}
 
 	/* apped work request to send list */
-	if (send_list == NULL) {
-		send_list = send_list_last = send_wr;
-	} else {
-		send_list_last->next = send_wr;
-		send_list_last = send_list_last->next;
-	}
-	/* we have to request a CQE if max_send_wr is reached to avoid overflows */
-	if ((++send_list_length%IB_MAX_SEND_WR) == 0) {
-		send_list_last->send_flags 	= IBV_SEND_SIGNALED;
-	}
+	append_to_send_list(send_wr);
 }
 
 /**
@@ -817,10 +829,6 @@ void enqueue_all_mrs(void)
 static inline
 bool termination_criterion(void)
 {
-	/* no pre-copy phase for the cold-migration */
-	if (mig_params.type == MIG_TYPE_COLD)
-		return true;
-
 	/* use a simple counter */
 	static uint32_t mig_round = 0;
 
@@ -862,20 +870,12 @@ void precopy_phase(mem_mappings_t guest_mem, mem_mappings_t mem_mappings)
 	con_com_buf();
 
 	/* perform pre-copy iterations */
-	while (!termination_criterion()) {
-		/* create send list and process */
-		switch (mig_params.mode) {
-		case MIG_MODE_COMPLETE_DUMP:
-			enqueue_all_mrs();
-			break;
-		case MIG_MODE_INCREMENTAL_DUMP:
-			/* iterate guest page tables */
-			determine_dirty_pages(create_send_list_entry);
-			break;
-		default:
-			fprintf(stderr, "[ERROR] Unknown migration mode. Abort!\n");
-			exit(EXIT_FAILURE);
-		}
+	while (!(mig_params.type == MIG_TYPE_COLD) && !termination_criterion()) {
+		/* iterate guest page tables
+		 * -> ignore migration mode
+		 * -> enforce INCREMENTAL dumps
+		 */
+		determine_dirty_pages(create_send_list_entry);
 
 		/* is there anything to send? */
 		if (send_list_length != 0) {
@@ -890,6 +890,7 @@ void precopy_phase(mem_mappings_t guest_mem, mem_mappings_t mem_mappings)
 
 	}
 
+	return;
 }
 
 
@@ -907,22 +908,31 @@ void stop_and_copy_phase(void)
 
 
 	/* determine migration mode */
-	switch (mig_params.mode) {
-	case MIG_MODE_COMPLETE_DUMP:
-		enqueue_all_mrs();
-		break;
-	case MIG_MODE_INCREMENTAL_DUMP:
-		/* iterate guest page tables */
+	if (mig_params.type == MIG_TYPE_COLD) {
+		switch (mig_params.mode) {
+		case MIG_MODE_COMPLETE_DUMP:
+			enqueue_all_mrs();
+			break;
+		case MIG_MODE_INCREMENTAL_DUMP:
+			/* iterate guest page tables */
+			determine_dirty_pages(create_send_list_entry);
+			break;
+		default:
+			fprintf(stderr, "[ERROR] Unknown migration mode. Abort!\n");
+			exit(EXIT_FAILURE);
+		}
+	} else if (mig_params.type == MIG_TYPE_LIVE) {
 		determine_dirty_pages(create_send_list_entry);
-		break;
-	default:
-		fprintf(stderr, "[ERROR] Unknown migration mode. Abort!\n");
+	} else {
+		fprintf(stderr, "[ERROR] Unknown migration type. Abort!\n");
 		exit(EXIT_FAILURE);
 	}
 
-	/* create a dumy WR request if there is nothing to send */
-	if (send_list_length == 0)
-		create_send_list_entry(NULL, 0, NULL, 0);
+	/* create a dumy WR request if there is nothing to be sent */
+	if (send_list_length == 0) {
+		struct ibv_send_wr *send_wr =  prepare_send_list_elem();
+		append_to_send_list(send_wr);
+	}
 
 	/* we have to wait for the last WR before informing dest */
 	send_list_last->wr_id 		= IB_WR_WRITE_LAST_PAGE_ID;
