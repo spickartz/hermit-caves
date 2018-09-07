@@ -45,6 +45,8 @@
 
 #ifdef __RDMA_MIGRATION__
 
+#define MIG_ITERS 		(4)
+
 #define IB_CQ_ENTRIES 		(1)
 #define IB_MAX_INLINE_DATA 	(0)
 #define IB_MAX_DEST_RD_ATOMIC 	(1)
@@ -828,10 +830,10 @@ bool termination_criterion(void)
 
 /**
  * \brief The pre-copy phase of the live-migration
- * 
+ *
  * \param guest_mem the guest physical memory
  * \param mem_mappings the mapped memory regions
- * 
+ *
  * This function initializes the IB connection and executes the precopy
  * iteration steps.
  */

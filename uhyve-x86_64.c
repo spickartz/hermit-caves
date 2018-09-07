@@ -120,7 +120,6 @@
 
 // define this macro to create checkpoints with KVM's dirty log
 //#define USE_DIRTY_LOG
-#define MIG_ITERS 4
 
 #define MAX_FNAME       256
 
