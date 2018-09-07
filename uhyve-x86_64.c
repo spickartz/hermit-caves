@@ -950,12 +950,7 @@ void *migration_handler(void *arg)
 	convert_to_host_virt(&guest_physical_memory);
 
 	/* pre-copy phase */
-	if (get_migration_type() == MIG_TYPE_LIVE) {
-		/* resend rounds */
-		for (i=0; i<MIG_ITERS; ++i) {
-			send_guest_mem(0, guest_physical_memory, mem_mappings);
-		}
-	}
+	precopy_phase(guest_physical_memory, mem_mappings);
 
 	/* synchronize VCPU threads */
 	assert(vcpu_thread_states == NULL);
@@ -965,7 +960,7 @@ void *migration_handler(void *arg)
 	pthread_barrier_wait(&migration_barrier);
 
 	/* send the final dump */
-	send_guest_mem(1, guest_physical_memory, mem_mappings);
+	stop_and_copy_phase();
 	fprintf(stderr, "Memory sent! (Guest size: %zu bytes)\n", guest_size);
 
 	/* free mem_mappings and guest_physical_memory info */

@@ -809,45 +809,98 @@ void enqueue_all_mrs(void)
 	}
 }
 
+/**
+ * \brief A simple termination criterion for the live-migration
+ */
+static inline
+bool termination_criterion(void)
+{
+	/* no pre-copy phase for the cold-migration */
+	if (mig_params.type == MIG_TYPE_COLD)
+		return true;
+
+	/* use a simple counter */
+	static uint32_t mig_round = 0;
+
+	return (mig_round++ == MIG_ITERS)? true : false;
+}
+
 
 /**
- * \brief Sends the guest memory to the destination
- *
- * \param final_dump last dump of a live migration
+ * \brief The pre-copy phase of the live-migration
+ * 
  * \param guest_mem the guest physical memory
  * \param mem_mappings the mapped memory regions
+ * 
+ * This function initializes the IB connection and executes the precopy
+ * iteration steps.
  */
-void send_guest_mem(bool final_dump, mem_mappings_t guest_mem, mem_mappings_t mem_mappings)
+void precopy_phase(mem_mappings_t guest_mem, mem_mappings_t mem_mappings)
+{
+	/* the live migration needs the whole guest memory to be registered */
+	if ((mig_params.type == MIG_TYPE_LIVE) || (mem_mappings.count == 0)) {
+		init_com_hndl(guest_mem, true);
+	} else {
+		init_com_hndl(mem_mappings, true);
+	}
+
+	/* prefetch allocated regions if ODP is used */
+	if (mig_params.use_odp && mig_params.prefetch) {
+		prefetch_mem_mappings(mem_mappings);
+
+		/* disable prefetching for cold/complete migration */
+		if ((mig_params.mode == MIG_MODE_COMPLETE_DUMP) ||
+			(mig_params.type == MIG_TYPE_COLD)) {
+				mig_params.prefetch = false;
+			}
+	}
+
+	/* establish the IB connection */
+	exchange_qp_info(false);
+	con_com_buf();
+
+	/* perform pre-copy iterations */
+	while (!termination_criterion()) {
+		/* create send list and process */
+		switch (mig_params.mode) {
+		case MIG_MODE_COMPLETE_DUMP:
+			enqueue_all_mrs();
+			break;
+		case MIG_MODE_INCREMENTAL_DUMP:
+			/* iterate guest page tables */
+			determine_dirty_pages(create_send_list_entry);
+			break;
+		default:
+			fprintf(stderr, "[ERROR] Unknown migration mode. Abort!\n");
+			exit(EXIT_FAILURE);
+		}
+
+		/* is there anything to send? */
+		if (send_list_length != 0) {
+			process_send_list();
+		} else {
+			break;
+		}
+
+		/* we want a CQE for the last WR */
+		send_list_last->wr_id 		= IB_WR_WRITE_LAST_PAGE_ID;
+		send_list_last->send_flags 	= IBV_SEND_SIGNALED;
+	}
+}
+
+
+/**
+ * \brief The stop-and-copy phase of the live-migration
+ *
+ * This function performs the last step of the migration. After freezing the
+ * VCPUs the guest-physical memory is transferred (another time) to the
+ * destination.
+ */
+void stop_and_copy_phase(void)
 {
 	int res = 0, i = 0;
 	static bool ib_initialized = false;
 
-	/* prepare IB channel */
-	if (!ib_initialized) {
-		/* the live migration needs the whole guest memory to be registered */
-		if ((mig_params.type == MIG_TYPE_LIVE) || (mem_mappings.count == 0)) {
-			init_com_hndl(guest_mem, true);
-		} else {
-			init_com_hndl(mem_mappings, true);
-		}
-
-		/* prefetch allocated regions if ODP is used */
-		if (mig_params.use_odp && mig_params.prefetch) {
-			prefetch_mem_mappings(mem_mappings);
-
-			/* disable prefetching for cold/complete migration */
-			if ((mig_params.mode == MIG_MODE_COMPLETE_DUMP) ||
-				(mig_params.type == MIG_TYPE_COLD)) {
-					mig_params.prefetch = false;
-				}
-		}
-
-		/* establish the IB connection */
-		exchange_qp_info(false);
-		con_com_buf();
-
-		ib_initialized = true;
-	}
 
 	/* determine migration mode */
 	switch (mig_params.mode) {
@@ -868,23 +921,12 @@ void send_guest_mem(bool final_dump, mem_mappings_t guest_mem, mem_mappings_t me
 		create_send_list_entry(NULL, 0, NULL, 0);
 
 	/* we have to wait for the last WR before informing dest */
-	if ((mig_params.mode == MIG_MODE_COMPLETE_DUMP) || final_dump) {
-		send_list_last->wr_id 		= IB_WR_WRITE_LAST_PAGE_ID;
-		send_list_last->opcode 		= IBV_WR_RDMA_WRITE_WITH_IMM;
-		send_list_last->send_flags 	= IBV_SEND_SIGNALED | IBV_SEND_SOLICITED;
-		send_list_last->imm_data 	= htonl(0x1);
-	} else {
-		send_list_last->wr_id 		= IB_WR_WRITE_LAST_PAGE_ID;
-		send_list_last->send_flags 	= IBV_SEND_SIGNALED;
-	}
-
-	printf("[DEBUG] Send list length %d\n", send_list_length);
+	send_list_last->wr_id 		= IB_WR_WRITE_LAST_PAGE_ID;
+	send_list_last->opcode 		= IBV_WR_RDMA_WRITE_WITH_IMM;
+	send_list_last->send_flags 	= IBV_SEND_SIGNALED | IBV_SEND_SOLICITED;
+	send_list_last->imm_data 	= htonl(0x1);
 
 	process_send_list();
-
-	/* do not close the channel in a pre-dump */
-	if (!final_dump)
-		return;
 
 	/* free IB-related resources */
 	destroy_com_hndl();
