@@ -27,8 +27,8 @@
 
 #define _GNU_SOURCE
 
+#include <err.h>
 #include <event.h>
-#include <pthread.h>
 #include <stdlib.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -39,30 +39,31 @@
 
 #define UHYVE_SOCK_PATH "/tmp/uhyve.sock"
 
-typedef struct uhyve_sock {
+typedef struct uhyve_monitor_sock {
         int                sock;
         struct sockaddr_un unix_sock_addr;
         int                len;
-} uhyve_sock_t;
+} uhyve_monitor_sock_t;
 
-static pthread_t    uhyve_monitor_thread;
-static uhyve_sock_t uhyve_monitor_sock;
+typedef struct uhyve_monitor_event {
+	struct event accept_ev;
+	struct event_base *evbase;
+} uhyve_monitor_event_t;
 
-// event variables
-static struct event       uhyve_monitor_accept_ev;
-static struct event_base *uhyve_monitor_evbase;
+static uhyve_monitor_sock_t uhyve_monitor_sock;
+static uhyve_monitor_event_t uhyve_monitor_event;
 
 /**
- * \brief The uyve monitor thread
+ * \brief The uyve monitor callback
  *
- * This thread listens on a UNIX socket that is used to receive json request to:
+ * This is the listener callback that is used to receive json request to:
  * - migrate
  * - create/restore checkpoints
  * - start an application
  * - modify the guest configuration
  */
 void
-uhyve_monitor_event(int fd, short ev, void *arg)
+uhyve_monitor_event_callback(int fd, short ev, void *arg)
 {
         fprintf(stderr, "[WARNING] The event loop ist not implemented yet.");
 }
@@ -113,29 +114,57 @@ uhyve_monitor_init_ev_sock(void)
 void
 uhyve_monitor_init(void)
 {
+	fprintf(stderr, "[INFO] Initializing the uhyve monitor ...\n");
+
+	// create the event base
+	uhyve_monitor_event.evbase = event_base_new();
+
         // initialize the event socket
         uhyve_monitor_init_ev_sock();
 
         // set callback function
-        if (event_assign(&uhyve_monitor_accept_ev,
-                         uhyve_monitor_evbase,
+        if (event_assign(&uhyve_monitor_event.accept_ev,
+                         uhyve_monitor_event.evbase,
                          uhyve_monitor_sock.sock,
                          (EV_READ | EV_PERSIST),
-                         uhyve_monitor_event,
+                         uhyve_monitor_event_callback,
                          NULL) < 0) {
-                perror("[ERROR] Could not set the event callback.");
-                exit(EXIT_FAILURE);
-        }
-        // add the event to set of pending events
-        if (event_add(&uhyve_monitor_accept_ev, NULL) < 0) {
-                perror(
-                    "[ERROR] Could not add the event to the set of pending events.");
+                err(1, "[ERROR] Could not set the event callback.");
         }
 
-        // start the event loop
-        if (event_base_dispatch(uhyve_monitor_evbase) < 0) {
+	// add the event to set of pending events
+        if (event_add(&uhyve_monitor_event.accept_ev, NULL) < 0) {
+                err(1, "[ERROR] Could not add the event to the set of pending events.");
+        }
+
+	// start the event loop
+       if (event_base_dispatch(uhyve_monitor_event.evbase) < 0) {
                 perror("[ERROR] Could not start the uhyve monitor event loop.");
         }
 
         return;
+}
+
+
+/**
+ * \brief Frees monitor-related resources
+ */
+void
+uhyve_monitor_destroy(void)
+{
+	// close the uhyve monitor socket
+	close(uhyve_monitor_sock.sock);
+
+	// cleanup socket path
+        unlink(UHYVE_SOCK_PATH);
+
+	// delete the event
+	if (event_del(&uhyve_monitor_event.accept_ev) < 0) {
+		err(1, "[ERROR] Could not delete the accept event.");
+	}
+
+	// exit the loop
+	if (event_base_loopexit(uhyve_monitor_event.evbase, NULL) < 0) {
+		err(1, "[ERROR] Could not exit the event loop.");
+	}
 }

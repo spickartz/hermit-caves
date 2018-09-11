@@ -177,6 +177,8 @@ static void uhyve_exit(void* arg)
 {
 	//print_registers();
 
+	uhyve_monitor_destroy();
+
 	if (pthread_mutex_trylock(&kvm_lock))
 	{
 		close_fd(&vcpufd);

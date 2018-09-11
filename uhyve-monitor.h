@@ -34,4 +34,5 @@
 
 #define __UHYVE_MONITOR_H__H__
 void uhyve_monitor_init(void);
+void uhyve_monitor_destroy(void);
 #endif /* __UHYVE_MONITOR_H__ */
