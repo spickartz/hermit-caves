@@ -663,6 +663,7 @@ int uhyve_init(char *path)
 	atexit(uhyve_atexit);
 
 	const char *start_mig_server = getenv("HERMIT_MIGRATION_SERVER");
+	const char *start_uhyve_monitor = getenv("HERMIT_MONITOR");
 
 	/*
 	 * Three startups
@@ -670,7 +671,10 @@ int uhyve_init(char *path)
 	 * b) load existing checkpoint
 	 * c) normal run
 	 */
- 	if (start_mig_server) {
+	if (start_uhyve_monitor) {
+		// create the monitor thread
+		uhyve_monitor_init();
+	} else if (start_mig_server) {
 		migration = true;
 		migration_metadata_t metadata;
 		wait_for_incomming_migration(&metadata, MIGRATION_PORT);
