@@ -30,6 +30,8 @@
 #include <err.h>
 #include <event.h>
 #include <event2/listener.h>
+#include <event2/thread.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -54,6 +56,7 @@ typedef struct uhyve_monitor_event {
 
 static uhyve_monitor_sock_t  uhyve_monitor_sock;
 static uhyve_monitor_event_t uhyve_monitor_event;
+static pthread_t             uhyve_monitor_thread;
 
 static void
 uhyve_monitor_on_conn_event(struct bufferevent *bev, short events,
@@ -154,6 +157,17 @@ uhyve_monitor_init_evconnlistener(void)
 	}
 }
 
+/*
+ * \brief The uhyve monitor event loop
+ */
+void *
+uhyve_monitor_event_loop(void *args)
+{
+	if (event_base_dispatch(uhyve_monitor_event.evbase) < 0) {
+		perror("[ERROR] Could not start the uhyve monitor event loop.");
+	}
+}
+
 /**
  * \brief Initializes the uhyve monitor and starts the event  loop
  */
@@ -161,6 +175,11 @@ void
 uhyve_monitor_init(void)
 {
 	fprintf(stderr, "[INFO] Initializing the uhyve monitor ...\n");
+
+	// setup libevent to suppor threading
+	if (evthread_use_pthreads() < 0) {
+		err(1, "[ERROR] Could not enable thread support for libevent.");
+	}
 
 	// create the event base
 	if ((uhyve_monitor_event.evbase = event_base_new()) == 0) {
@@ -171,8 +190,9 @@ uhyve_monitor_init(void)
 	uhyve_monitor_init_evconnlistener();
 
 	// start the event loop
-	if (event_base_dispatch(uhyve_monitor_event.evbase) < 0) {
-		perror("[ERROR] Could not start the uhyve monitor event loop.");
+	if (pthread_create(
+		&uhyve_monitor_thread, NULL, uhyve_monitor_event_loop, NULL)) {
+		err(1, "[ERROR] Could not create the uhyve monitor event loop");
 	}
 }
 
@@ -192,4 +212,7 @@ uhyve_monitor_destroy(void)
 	if (event_base_loopexit(uhyve_monitor_event.evbase, NULL) < 0) {
 		err(1, "[ERROR] Could not exit the event loop.");
 	}
+
+	// wait for the monitor thread
+	pthread_join(uhyve_monitor_thread, NULL);
 }
