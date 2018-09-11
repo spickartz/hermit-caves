@@ -29,6 +29,7 @@
 
 #include <err.h>
 #include <event.h>
+#include <event2/listener.h>
 #include <stdlib.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -55,59 +56,72 @@ static uhyve_monitor_sock_t  uhyve_monitor_sock;
 static uhyve_monitor_event_t uhyve_monitor_event;
 
 static void
-conn_eventcb(struct bufferevent *bev, short events, void *user_data)
+uhyve_monitor_on_conn_event(struct bufferevent *bev, short events,
+			    void *user_data)
 {
 	if (events & BEV_EVENT_EOF) {
-		printf("Connection closed.\n");
-	} else if (events & BEV_EVENT_ERROR) {
-		printf("Got an error on the connection: %s\n",
-		       strerror(errno)); /*XXX win32*/
-	}
-	/* None of the other events can happen here, since we haven't enabled
-	 * timeouts */
-	bufferevent_free(bev);
-}
-
-static void
-conn_readcb(struct bufferevent *bev, void *user_data)
-{
-	struct evbuffer *output = bufferevent_get_output(bev);
-	if (evbuffer_get_length(output) == 0) {
-		printf("flushed answer\n");
+		// free the event buffer
 		bufferevent_free(bev);
+	} else if (events & BEV_EVENT_ERROR) {
+		perror("Got an error on the connection");
 	}
 }
 
 /**
- * \brief The uyve monitor callback
+ * \brief The uyve task handler
  *
- * This is the listener callback that is used to receive json request to:
+ * \param task A json string encoding the task
+ *
+ * This is the task handler that processes the json request to:
  * - migrate
  * - create/restore checkpoints
  * - start an application
  * - modify the guest configuration
  */
 static void
-uhyve_monitor_event_callback(struct evconnlistener *listener,
-			     evutil_socket_t fd, struct sockaddr *sa,
-			     int socklen, void *user_data)
+uhyve_monitor_task_handler(void *task)
 {
-	struct bufferevent *bev;
+	printf("'---%s---'\n", task);
+	free(task);
+}
 
+/**
+ * \brief Get a task string out of the event buffer
+ */
+static void
+uhyve_monitor_receive_task(struct bufferevent *bev, void *user_data)
+{
+	// get the message out of the buffer
+	struct evbuffer *input         = bufferevent_get_input(bev);
+	size_t           bytes_to_read = evbuffer_get_length(input);
+	void *           msg           = malloc(bytes_to_read);
+	bufferevent_read(bev, msg, bytes_to_read);
+
+	// pass the message to the task handler
+	uhyve_monitor_task_handler(msg);
+}
+
+/**
+ * \brief This callback is invoked once a client connects to the monitor
+ */
+static void
+uhyve_monitor_on_accept(struct evconnlistener *listener, evutil_socket_t fd,
+			struct sockaddr *sa, int socklen, void *user_data)
+{
+
+	// create a new buffer event socket and register callbacks
+	struct bufferevent *bev;
 	if ((bev = bufferevent_socket_new(
 		 uhyve_monitor_event.evbase, fd, BEV_OPT_CLOSE_ON_FREE)) < 0) {
 		err(1, "[ERROR] Could not construct bufferevent.");
 	}
-	bufferevent_setcb(bev, conn_readcb, NULL, conn_eventcb, NULL);
+	bufferevent_setcb(bev,
+			  uhyve_monitor_receive_task,
+			  NULL,
+			  uhyve_monitor_on_conn_event,
+			  NULL);
 	bufferevent_disable(bev, EV_WRITE);
 	bufferevent_enable(bev, EV_READ);
-
-	ssize_t num_bytes = bufferevent_get_max_to_read(bev);
-	void *  msg       = malloc(num_bytes);
-	bufferevent_read(bev, msg, num_bytes);
-
-	printf("'s'\n", msg);
-	free(msg);
 }
 
 /**
@@ -128,15 +142,15 @@ uhyve_monitor_init_evconnlistener(void)
 		sizeof(uhyve_monitor_sock.unix_sock_addr.sun_path) - 1);
 	uhyve_monitor_sock.listener = evconnlistener_new_bind(
 	    uhyve_monitor_event.evbase,
-	    uhyve_monitor_event_callback,
+	    uhyve_monitor_on_accept,
 	    NULL,
 	    LEV_OPT_REUSEABLE | LEV_OPT_CLOSE_ON_FREE,
 	    -1,
 	    (struct sockaddr *)&uhyve_monitor_sock.unix_sock_addr,
 	    sizeof(uhyve_monitor_sock.unix_sock_addr));
 
-	if (listener == NULL) {
-		err(1, "[ERROR] Could not create the event listener.")
+	if (uhyve_monitor_sock.listener == NULL) {
+		err(1, "[ERROR] Could not create the event listener.");
 	}
 }
 
@@ -150,7 +164,7 @@ uhyve_monitor_init(void)
 
 	// create the event base
 	if ((uhyve_monitor_event.evbase = event_base_new()) == 0) {
-		err("[ERROR] Could not initialize libevent.")
+		err(1, "[ERROR] Could not initialize libevent.");
 	}
 
 	// initialize the event socket
@@ -160,8 +174,6 @@ uhyve_monitor_init(void)
 	if (event_base_dispatch(uhyve_monitor_event.evbase) < 0) {
 		perror("[ERROR] Could not start the uhyve monitor event loop.");
 	}
-
-	return;
 }
 
 /**
