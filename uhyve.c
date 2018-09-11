@@ -66,6 +66,7 @@
 #include "uhyve.h"
 #include "uhyve-syscalls.h"
 #include "uhyve-migration.h"
+#include "uhyve-monitor.h"
 #include "uhyve-net.h"
 #include "uhyve-gdb.h"
 #include "proxy.h"

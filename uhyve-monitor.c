@@ -27,9 +27,13 @@
 
 #define _GNU_SOURCE
 
-#include <pthread.h>
-#include <socket.h>
 #include <event.h>
+#include <pthread.h>
+#include <stdlib.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/un.h>
+#include <unistd.h>
 
 #include "uhyve-monitor.h"
 
@@ -60,7 +64,7 @@ static struct event_base *uhyve_monitor_evbase;
 void
 uhyve_monitor_event(int fd, short ev, void *arg)
 {
-        fprintf(stderr, "[WARNING] The event loop ist not implemented yet.")
+        fprintf(stderr, "[WARNING] The event loop ist not implemented yet.");
 }
 
 /**
@@ -88,19 +92,17 @@ uhyve_monitor_init_ev_sock(void)
 
         if (bind(uhyve_monitor_sock.sock,
                  &(uhyve_monitor_sock.unix_sock_addr),
-                 uhyve_monitor_sock->len) < 0) {
-                perror(
-                    "[ERROR] Could not bind the uhyve monitor socket to '%s'.",
-                    UHYVE_SOCK_PATH);
+                 uhyve_monitor_sock.len) < 0) {
+                perror("[ERROR] Could not bind the uhyve monitor socket.");
                 exit(EXIT_FAILURE);
         }
 
         // make it accessible for everyone
-        chmod(ADDRESS, S_IRWXU | S_IROTH | S_IWOTH);
+        chmod(UHYVE_SOCK_PATH, S_IRWXU | S_IROTH | S_IWOTH);
 
         // start listening (one connection at a time)
-        if (listen(my_sock->socket, 1) < 0) {
-                perror("[ERROR] Could not listen on the uhyve monitor socket.");
+        if (listen(uhyve_monitor_sock.sock, 1) < 0) {
+                perror("[ERROR] Could not listen on the uhyve monitor socket.");
                 exit(EXIT_FAILURE);
         }
 }
@@ -117,7 +119,7 @@ uhyve_monitor_init(void)
         // set callback function
         if (event_assign(&uhyve_monitor_accept_ev,
                          uhyve_monitor_evbase,
-                         uhyve_montor_sock.sock,
+                         uhyve_monitor_sock.sock,
                          (EV_READ | EV_PERSIST),
                          uhyve_monitor_event,
                          NULL) < 0) {
@@ -125,7 +127,7 @@ uhyve_monitor_init(void)
                 exit(EXIT_FAILURE);
         }
         // add the event to set of pending events
-        if (event_att(&uhyve_monitor_accept_ev, NULL) < 0) {
+        if (event_add(&uhyve_monitor_accept_ev, NULL) < 0) {
                 perror(
                     "[ERROR] Could not add the event to the set of pending events.");
         }
