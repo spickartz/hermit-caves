@@ -40,18 +40,43 @@
 #define UHYVE_SOCK_PATH "/tmp/uhyve.sock"
 
 typedef struct uhyve_monitor_sock {
-        int                sock;
-        struct sockaddr_un unix_sock_addr;
-        int                len;
+	struct evconnlistener *listener;
+	int                    sock;
+	struct sockaddr_un     unix_sock_addr;
+	int                    len;
 } uhyve_monitor_sock_t;
 
 typedef struct uhyve_monitor_event {
-	struct event accept_ev;
+	struct event       accept_ev;
 	struct event_base *evbase;
 } uhyve_monitor_event_t;
 
-static uhyve_monitor_sock_t uhyve_monitor_sock;
+static uhyve_monitor_sock_t  uhyve_monitor_sock;
 static uhyve_monitor_event_t uhyve_monitor_event;
+
+static void
+conn_eventcb(struct bufferevent *bev, short events, void *user_data)
+{
+	if (events & BEV_EVENT_EOF) {
+		printf("Connection closed.\n");
+	} else if (events & BEV_EVENT_ERROR) {
+		printf("Got an error on the connection: %s\n",
+		       strerror(errno)); /*XXX win32*/
+	}
+	/* None of the other events can happen here, since we haven't enabled
+	 * timeouts */
+	bufferevent_free(bev);
+}
+
+static void
+conn_readcb(struct bufferevent *bev, void *user_data)
+{
+	struct evbuffer *output = bufferevent_get_output(bev);
+	if (evbuffer_get_length(output) == 0) {
+		printf("flushed answer\n");
+		bufferevent_free(bev);
+	}
+}
 
 /**
  * \brief The uyve monitor callback
@@ -62,50 +87,57 @@ static uhyve_monitor_event_t uhyve_monitor_event;
  * - start an application
  * - modify the guest configuration
  */
-void
-uhyve_monitor_event_callback(int fd, short ev, void *arg)
+static void
+uhyve_monitor_event_callback(struct evconnlistener *listener,
+			     evutil_socket_t fd, struct sockaddr *sa,
+			     int socklen, void *user_data)
 {
-        fprintf(stderr, "[WARNING] The event loop ist not implemented yet.");
+	struct bufferevent *bev;
+
+	if ((bev = bufferevent_socket_new(
+		 uhyve_monitor_event.evbase, fd, BEV_OPT_CLOSE_ON_FREE)) < 0) {
+		err(1, "[ERROR] Could not construct bufferevent.");
+	}
+	bufferevent_setcb(bev, conn_readcb, NULL, conn_eventcb, NULL);
+	bufferevent_disable(bev, EV_WRITE);
+	bufferevent_enable(bev, EV_READ);
+
+	ssize_t num_bytes = bufferevent_get_max_to_read(bev);
+	void *  msg       = malloc(num_bytes);
+	bufferevent_read(bev, msg, num_bytes);
+
+	printf("'s'\n", msg);
+	free(msg);
 }
 
 /**
  * \brief Initializes the event socket
  */
 static void
-uhyve_monitor_init_ev_sock(void)
+uhyve_monitor_init_evconnlistener(void)
 {
-        // cleanup old socket
-        unlink(UHYVE_SOCK_PATH);
+	// cleanup old socket
+	unlink(UHYVE_SOCK_PATH);
 
-        // create the uhyve monitor socket
-        if ((uhyve_monitor_sock.sock = socket(AF_UNIX, SOCK_STREAM, 0)) < 0) {
-                perror("[ERROR] Could not create the uhyve monitor socket");
-                exit(EXIT_FAILURE);
-        }
+	memset(&uhyve_monitor_sock.unix_sock_addr,
+	       0,
+	       sizeof(&uhyve_monitor_sock.unix_sock_addr));
+	uhyve_monitor_sock.unix_sock_addr.sun_family = AF_UNIX;
+	strncpy(uhyve_monitor_sock.unix_sock_addr.sun_path,
+		UHYVE_SOCK_PATH,
+		sizeof(uhyve_monitor_sock.unix_sock_addr.sun_path) - 1);
+	uhyve_monitor_sock.listener = evconnlistener_new_bind(
+	    uhyve_monitor_event.evbase,
+	    uhyve_monitor_event_callback,
+	    NULL,
+	    LEV_OPT_REUSEABLE | LEV_OPT_CLOSE_ON_FREE,
+	    -1,
+	    (struct sockaddr *)&uhyve_monitor_sock.unix_sock_addr,
+	    sizeof(uhyve_monitor_sock.unix_sock_addr));
 
-        // bind the socket to UHYVE_SOCK_PATH
-        uhyve_monitor_sock.unix_sock_addr.sun_family = AF_UNIX;
-        strcpy(uhyve_monitor_sock.unix_sock_addr.sun_path, UHYVE_SOCK_PATH);
-
-        uhyve_monitor_sock.len =
-            sizeof(uhyve_monitor_sock.unix_sock_addr.sun_family) +
-            strlen(uhyve_monitor_sock.unix_sock_addr.sun_path);
-
-        if (bind(uhyve_monitor_sock.sock,
-                 &(uhyve_monitor_sock.unix_sock_addr),
-                 uhyve_monitor_sock.len) < 0) {
-                perror("[ERROR] Could not bind the uhyve monitor socket.");
-                exit(EXIT_FAILURE);
-        }
-
-        // make it accessible for everyone
-        chmod(UHYVE_SOCK_PATH, S_IRWXU | S_IROTH | S_IWOTH);
-
-        // start listening (one connection at a time)
-        if (listen(uhyve_monitor_sock.sock, 1) < 0) {
-                perror("[ERROR] Could not listen on the uhyve monitor socket.");
-                exit(EXIT_FAILURE);
-        }
+	if (listener == NULL) {
+		err(1, "[ERROR] Could not create the event listener.")
+	}
 }
 
 /**
@@ -117,34 +149,20 @@ uhyve_monitor_init(void)
 	fprintf(stderr, "[INFO] Initializing the uhyve monitor ...\n");
 
 	// create the event base
-	uhyve_monitor_event.evbase = event_base_new();
+	if ((uhyve_monitor_event.evbase = event_base_new()) == 0) {
+		err("[ERROR] Could not initialize libevent.")
+	}
 
-        // initialize the event socket
-        uhyve_monitor_init_ev_sock();
-
-        // set callback function
-        if (event_assign(&uhyve_monitor_event.accept_ev,
-                         uhyve_monitor_event.evbase,
-                         uhyve_monitor_sock.sock,
-                         (EV_READ | EV_PERSIST),
-                         uhyve_monitor_event_callback,
-                         NULL) < 0) {
-                err(1, "[ERROR] Could not set the event callback.");
-        }
-
-	// add the event to set of pending events
-        if (event_add(&uhyve_monitor_event.accept_ev, NULL) < 0) {
-                err(1, "[ERROR] Could not add the event to the set of pending events.");
-        }
+	// initialize the event socket
+	uhyve_monitor_init_evconnlistener();
 
 	// start the event loop
-       if (event_base_dispatch(uhyve_monitor_event.evbase) < 0) {
-                perror("[ERROR] Could not start the uhyve monitor event loop.");
-        }
+	if (event_base_dispatch(uhyve_monitor_event.evbase) < 0) {
+		perror("[ERROR] Could not start the uhyve monitor event loop.");
+	}
 
-        return;
+	return;
 }
-
 
 /**
  * \brief Frees monitor-related resources
@@ -156,12 +174,7 @@ uhyve_monitor_destroy(void)
 	close(uhyve_monitor_sock.sock);
 
 	// cleanup socket path
-        unlink(UHYVE_SOCK_PATH);
-
-	// delete the event
-	if (event_del(&uhyve_monitor_event.accept_ev) < 0) {
-		err(1, "[ERROR] Could not delete the accept event.");
-	}
+	unlink(UHYVE_SOCK_PATH);
 
 	// exit the loop
 	if (event_base_loopexit(uhyve_monitor_event.evbase, NULL) < 0) {
