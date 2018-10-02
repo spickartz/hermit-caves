@@ -84,7 +84,8 @@ uhyve_monitor_on_conn_event(struct bufferevent *bev, short events,
 static void
 uhyve_monitor_task_handler(void *task)
 {
-	printf("'---%s---'\n", task);
+	// parse the json task
+	json_value *json_task = json_parse((const json_char*)
 	free(task);
 }
 
@@ -101,7 +102,7 @@ uhyve_monitor_receive_task(struct bufferevent *bev, void *user_data)
 	bufferevent_read(bev, msg, bytes_to_read);
 
 	// pass the message to the task handler
-	uhyve_monitor_task_handler(msg);
+	uhyve_monitor_task_handler(msg, bytes_to_read);
 }
 
 /**
