@@ -16,6 +16,7 @@ set(SRC proxy.c
 	uhyve-net.c
 	uhyve-migration.c
 	uhyve-monitor.c
+	uhyve-json.c
 	uhyve-x86_64.c
 	uhyve-aarch64.c
 	uhyve-gdb.c
