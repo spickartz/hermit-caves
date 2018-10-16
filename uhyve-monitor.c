@@ -38,6 +38,7 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#include "uhyve-json.h"
 #include "uhyve-monitor.h"
 
 #define UHYVE_SOCK_PATH "/tmp/uhyve.sock"
@@ -57,6 +58,7 @@ typedef struct uhyve_monitor_event {
 static uhyve_monitor_sock_t  uhyve_monitor_sock;
 static uhyve_monitor_event_t uhyve_monitor_event;
 static pthread_t             uhyve_monitor_thread;
+static uint8_t               uhyve_monitor_initialized = 0;
 
 static void
 uhyve_monitor_on_conn_event(struct bufferevent *bev, short events,
@@ -74,6 +76,7 @@ uhyve_monitor_on_conn_event(struct bufferevent *bev, short events,
  * \brief The uyve task handler
  *
  * \param task A json string encoding the task
+ * \param length length of the task string
  *
  * This is the task handler that processes the json request to:
  * - migrate
@@ -81,12 +84,13 @@ uhyve_monitor_on_conn_event(struct bufferevent *bev, short events,
  * - start an application
  * - modify the guest configuration
  */
-static void
-uhyve_monitor_task_handler(void *task)
+static uint32_t
+uhyve_monitor_task_handler(void *task, size_t length)
 {
 	// parse the json task
-	json_value *json_task = json_parse((const json_char*)
-	free(task);
+	json_value *json_task = json_parse((const json_char *)task, length);
+
+	return 501;
 }
 
 /**
@@ -102,7 +106,15 @@ uhyve_monitor_receive_task(struct bufferevent *bev, void *user_data)
 	bufferevent_read(bev, msg, bytes_to_read);
 
 	// pass the message to the task handler
-	uhyve_monitor_task_handler(msg, bytes_to_read);
+	uint32_t status_code = uhyve_monitor_task_handler(msg, bytes_to_read);
+	free(msg);
+
+	// return the status code to the requesting entity
+	char status_code_str[4];
+	sprintf(status_code_str, "%u", status_code);
+	if (bufferevent_write(bev, status_code_str, 4) < 0) {
+		err(1, "[ERROR] Could write to the event buffer.");
+	}
 }
 
 /**
@@ -112,7 +124,6 @@ static void
 uhyve_monitor_on_accept(struct evconnlistener *listener, evutil_socket_t fd,
 			struct sockaddr *sa, int socklen, void *user_data)
 {
-
 	// create a new buffer event socket and register callbacks
 	struct bufferevent *bev;
 	if ((bev = bufferevent_socket_new(
@@ -124,8 +135,7 @@ uhyve_monitor_on_accept(struct evconnlistener *listener, evutil_socket_t fd,
 			  NULL,
 			  uhyve_monitor_on_conn_event,
 			  NULL);
-	bufferevent_disable(bev, EV_WRITE);
-	bufferevent_enable(bev, EV_READ);
+	bufferevent_enable(bev, EV_READ|EV_WRITE);
 }
 
 /**
@@ -175,6 +185,10 @@ uhyve_monitor_event_loop(void *args)
 void
 uhyve_monitor_init(void)
 {
+	// did we already initialize?
+	if (uhyve_monitor_initialized)
+		return;
+
 	fprintf(stderr, "[INFO] Initializing the uhyve monitor ...\n");
 
 	// setup libevent to suppor threading
@@ -195,6 +209,8 @@ uhyve_monitor_init(void)
 		&uhyve_monitor_thread, NULL, uhyve_monitor_event_loop, NULL)) {
 		err(1, "[ERROR] Could not create the uhyve monitor event loop");
 	}
+
+	uhyve_monitor_initialized = 1;
 }
 
 /**
@@ -203,6 +219,12 @@ uhyve_monitor_init(void)
 void
 uhyve_monitor_destroy(void)
 {
+	// did we initialize the monitor?
+	if (!uhyve_monitor_initialized)
+		return;
+
+	fprintf(stderr, "[INFO] Shutting down  the uhyve monitor ...\n");
+
 	// close the uhyve monitor socket
 	close(uhyve_monitor_sock.sock);
 
