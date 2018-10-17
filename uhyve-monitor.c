@@ -181,6 +181,8 @@ uhyve_monitor_task_handler(void *task, size_t length)
 static uint32_t
 uhyve_monitor_handle_start_app(json_value *json_task)
 {
+	// TODO: check if an application is already running
+
 	fprintf(stderr, "[INFO] Handling an application start event!\n");
 
 	// find path field
@@ -194,7 +196,8 @@ uhyve_monitor_handle_start_app(json_value *json_task)
 
 	// load the given application
 	char *path = json_task->u.object.values[path_index].value->u.string.ptr;
-	load_kernel(guest_mem, path);
+	if (load_kernel(guest_mem, path) != 0)
+		exit(EXIT_FAILURE);
 	sem_post(&monitor_sem);
 
 	return 200;
