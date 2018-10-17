@@ -41,7 +41,14 @@
 #include "uhyve-json.h"
 #include "uhyve-monitor.h"
 
+#define MIN(a, b) (a) < (b) ? (a) : (b)
 #define UHYVE_SOCK_PATH "/tmp/uhyve.sock"
+#define JSON_TASK_STR "task"
+
+static uint32_t uhyve_monitor_handle_start_app(json_value *json_task);
+static uint32_t uhyve_monitor_handle_create_checkpoint(json_value *json_task);
+static uint32_t uhyve_monitor_handle_load_checkpoint(json_value *json_task);
+static uint32_t uhyve_monitor_handle_migrate(json_value *json_task);
 
 typedef struct uhyve_monitor_sock {
 	struct evconnlistener *listener;
@@ -59,6 +66,22 @@ static uhyve_monitor_sock_t  uhyve_monitor_sock;
 static uhyve_monitor_event_t uhyve_monitor_event;
 static pthread_t             uhyve_monitor_thread;
 static uint8_t               uhyve_monitor_initialized = 0;
+
+typedef uint32_t (*task_handler_t)(json_value *json_task);
+typedef struct _task_to_handler_elem {
+	const char *   name;
+	task_handler_t handler;
+} task_to_handler_elem_t;
+
+static const task_to_handler_elem_t task_to_handler[] = {
+    {"start app", uhyve_monitor_handle_start_app},
+    {"create checkpoint", uhyve_monitor_handle_create_checkpoint},
+    {"load checkpoint", uhyve_monitor_handle_load_checkpoint},
+    {"migrate", uhyve_monitor_handle_migrate},
+};
+
+static const int task_to_handler_len =
+    sizeof(task_to_handler) / sizeof(task_to_handler[0]);
 
 static void
 uhyve_monitor_on_conn_event(struct bufferevent *bev, short events,
@@ -87,9 +110,88 @@ uhyve_monitor_on_conn_event(struct bufferevent *bev, short events,
 static uint32_t
 uhyve_monitor_task_handler(void *task, size_t length)
 {
+	uint32_t status_code = 0;
+
 	// parse the json task
 	json_value *json_task = json_parse((const json_char *)task, length);
 
+	// find task field
+	uint32_t i = 0;
+	for (i = 0; i < json_task->u.object.length; ++i) {
+		const json_char *entry_name =
+		    json_task->u.object.values[i].name;
+		const size_t entry_name_length =
+		    json_task->u.object.values[i].name_length;
+		size_t max_n = MIN(entry_name_length, strlen(JSON_TASK_STR));
+
+		if (strncmp(entry_name, JSON_TASK_STR, max_n) == 0)
+			break;
+	}
+
+	// determine task
+	const uint32_t   task_index = i;
+	const json_char *task_name =
+	    json_task->u.object.values[i].value->u.string.ptr;
+	const size_t task_name_length =
+	    json_task->u.object.values[i].value->u.string.length;
+
+	for (i = 0; i < task_to_handler_len; ++i) {
+		const size_t max_n =
+		    MIN(task_name_length, strlen(task_to_handler[i].name));
+		if (strncmp(task_name, task_to_handler[i].name, max_n) == 0) {
+			status_code = task_to_handler[i].handler(json_task);
+			break;
+		}
+	}
+
+	// task not found -> return 'Not Implemented'
+	if (i == task_to_handler_len) {
+		fprintf(stderr,
+			"[WARNING] Task '%s' not implemented.\n",
+			task_name);
+		status_code = 501;
+	}
+
+	return status_code;
+}
+
+/**
+ * \brief Task handler for: application start
+ */
+static uint32_t
+uhyve_monitor_handle_start_app(json_value *json_task)
+{
+	fprintf(stderr, "[INFO] Handling an application start event!\n");
+	return 501;
+}
+
+/**
+ * \brief Task handler for: checkpoint
+ */
+static uint32_t
+uhyve_monitor_handle_create_checkpoint(json_value *json_task)
+{
+	fprintf(stderr, "[INFO] Handling a checkpoint event!\n");
+	return 501;
+}
+
+/**
+ * \brief Task handler for: restore
+ */
+static uint32_t
+uhyve_monitor_handle_load_checkpoint(json_value *json_task)
+{
+	fprintf(stderr, "[INFO] Handling a restore event!\n");
+	return 501;
+}
+
+/**
+ * \brief Task handler for: migration
+ */
+static uint32_t
+uhyve_monitor_handle_migrate(json_value *json_task)
+{
+	fprintf(stderr, "[INFO] Handling a migration event!\n");
 	return 501;
 }
 
@@ -135,7 +237,7 @@ uhyve_monitor_on_accept(struct evconnlistener *listener, evutil_socket_t fd,
 			  NULL,
 			  uhyve_monitor_on_conn_event,
 			  NULL);
-	bufferevent_enable(bev, EV_READ|EV_WRITE);
+	bufferevent_enable(bev, EV_READ | EV_WRITE);
 }
 
 /**
