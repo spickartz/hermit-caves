@@ -97,6 +97,7 @@ __thread struct kvm_run *run = NULL;
 __thread int vcpufd = -1;
 __thread uint32_t cpuid = 0;
 static sem_t net_sem;
+sem_t monitor_sem;
 sem_t mig_sem;
 
 int uhyve_argc = -1;
@@ -675,6 +676,9 @@ int uhyve_init(char *path)
 	 * c) normal run
 	 */
 	if (start_uhyve_monitor) {
+		// initialize the semaphore
+		sem_init(&monitor_sem, 0, 0);
+
 		// create the monitor thread
 		uhyve_monitor_init();
 	} else if (start_mig_server) {
@@ -738,6 +742,7 @@ int uhyve_init(char *path)
 	vmfd = kvm_ioctl(kvm, KVM_CREATE_VM, 0);
 
 #ifdef __x86_64__
+	// TODO: revise start-up logic
 	init_kvm_arch();
 	if (restart) {
 		if (load_checkpoint(guest_mem, path) != 0)
@@ -745,6 +750,9 @@ int uhyve_init(char *path)
 	} else if (start_mig_server) {
 		load_migration_data(guest_mem);
 		close_migration_channel();
+	} else if (start_uhyve_monitor && (path == 0)) {
+		// wait for uhyve-monitor command
+		sem_wait(&monitor_sem);
 	} else {
 		if (load_kernel(guest_mem, path) != 0)
 			exit(EXIT_FAILURE);

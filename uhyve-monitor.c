@@ -32,6 +32,7 @@
 #include <event2/listener.h>
 #include <event2/thread.h>
 #include <pthread.h>
+#include <semaphore.h>
 #include <stdlib.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -40,6 +41,7 @@
 
 #include "uhyve-json.h"
 #include "uhyve-monitor.h"
+#include "uhyve.h"
 
 #define MIN(a, b) (a) < (b) ? (a) : (b)
 #define UHYVE_SOCK_PATH "/tmp/uhyve.sock"
@@ -49,6 +51,9 @@ static uint32_t uhyve_monitor_handle_start_app(json_value *json_task);
 static uint32_t uhyve_monitor_handle_create_checkpoint(json_value *json_task);
 static uint32_t uhyve_monitor_handle_load_checkpoint(json_value *json_task);
 static uint32_t uhyve_monitor_handle_migrate(json_value *json_task);
+
+extern uint8_t *guest_mem;
+extern sem_t    monitor_sem;
 
 typedef struct uhyve_monitor_sock {
 	struct evconnlistener *listener;
@@ -83,6 +88,24 @@ static const task_to_handler_elem_t task_to_handler[] = {
 static const int task_to_handler_len =
     sizeof(task_to_handler) / sizeof(task_to_handler[0]);
 
+static int32_t
+find_json_field(const char *field_name, json_value *json_task)
+{
+	uint32_t i = 0;
+	for (i = 0; i < json_task->u.object.length; ++i) {
+		const json_char *entry_name =
+		    json_task->u.object.values[i].name;
+		const size_t entry_name_length =
+		    json_task->u.object.values[i].name_length;
+		size_t max_n = MIN(entry_name_length, strlen(field_name));
+
+		if (strncmp(entry_name, field_name, max_n) == 0)
+			return i;
+	}
+
+	return -1;
+}
+
 static void
 uhyve_monitor_on_conn_event(struct bufferevent *bev, short events,
 			    void *user_data)
@@ -116,25 +139,22 @@ uhyve_monitor_task_handler(void *task, size_t length)
 	json_value *json_task = json_parse((const json_char *)task, length);
 
 	// find task field
-	uint32_t i = 0;
-	for (i = 0; i < json_task->u.object.length; ++i) {
-		const json_char *entry_name =
-		    json_task->u.object.values[i].name;
-		const size_t entry_name_length =
-		    json_task->u.object.values[i].name_length;
-		size_t max_n = MIN(entry_name_length, strlen(JSON_TASK_STR));
-
-		if (strncmp(entry_name, JSON_TASK_STR, max_n) == 0)
-			break;
+	int32_t task_index = -1;
+	if ((task_index = find_json_field(JSON_TASK_STR, json_task)) < 0) {
+		fprintf(
+		    stderr,
+		    "[ERROR] Json string does not contain a '%s' field. Abort!\n",
+		    JSON_TASK_STR);
+		return 400;
 	}
 
 	// determine task
-	const uint32_t   task_index = i;
 	const json_char *task_name =
-	    json_task->u.object.values[i].value->u.string.ptr;
+	    json_task->u.object.values[task_index].value->u.string.ptr;
 	const size_t task_name_length =
-	    json_task->u.object.values[i].value->u.string.length;
+	    json_task->u.object.values[task_index].value->u.string.length;
 
+	uint32_t i = 0;
 	for (i = 0; i < task_to_handler_len; ++i) {
 		const size_t max_n =
 		    MIN(task_name_length, strlen(task_to_handler[i].name));
@@ -162,7 +182,22 @@ static uint32_t
 uhyve_monitor_handle_start_app(json_value *json_task)
 {
 	fprintf(stderr, "[INFO] Handling an application start event!\n");
-	return 501;
+
+	// find path field
+	int32_t path_index = -1;
+	if ((path_index = find_json_field("path", json_task)) < 0) {
+		fprintf(
+		    stderr,
+		    "[ERROR] Start task is missing the 'path' field. Abort!\n");
+		return 400;
+	}
+
+	// load the given application
+	char *path = json_task->u.object.values[path_index].value->u.string.ptr;
+	load_kernel(guest_mem, path);
+	sem_post(&monitor_sem);
+
+	return 200;
 }
 
 /**
