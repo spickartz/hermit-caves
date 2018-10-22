@@ -905,24 +905,15 @@ void timer_handler(int signum)
 	no_checkpoint++;
 }
 
-void *migration_handler(void *arg)
+/** \brief The migration handler
+ *
+ * This is the actual function that implements the migration control flow.
+ * After its execution the process terminates gracefully.
+ */
+void migration_handler(void)
 {
-	sigset_t *signal_mask = (sigset_t *)arg;
 	int res = 0;
 	size_t i = 0;
-	int sig_caught;
-
-	/* wait for a migration request and connect to the migration server*/
-	while (1) {
-		sigwait(signal_mask, &sig_caught);
-
-		if (connect_to_server() < 0) {
-			fprintf(stderr, "[ERROR] Could not connect to the "
-					"destination. Abort!\n");
-		} else {
-			break;
-		}
-	}
 
 	/* send metadata */
 	migration_metadata_t metadata = {
@@ -954,12 +945,14 @@ void *migration_handler(void *arg)
 	/* pre-copy phase */
 	precopy_phase(guest_physical_memory, mem_mappings);
 
+	printf("HELLOOOOO\n");
 	/* synchronize VCPU threads */
 	assert(vcpu_thread_states == NULL);
 	vcpu_thread_states = (vcpu_state_t*)calloc(ncores, sizeof(vcpu_state_t));
 	for(i = 0; i < ncores; i++)
 		pthread_kill(vcpu_threads[i], SIGTHRMIG);
 	pthread_barrier_wait(&migration_barrier);
+	printf("World\n");
 
 	/* send the final dump */
 	stop_and_copy_phase();
@@ -987,7 +980,28 @@ void *migration_handler(void *arg)
 
 	/* close socket */
 	close_migration_channel();
+}
 
+
+void *migration_handler_thread(void *arg)
+{
+	sigset_t *signal_mask = (sigset_t *)arg;
+	int sig_caught;
+
+	/* wait for a migration request and connect to the migration server*/
+	while (1) {
+		sigwait(signal_mask, &sig_caught);
+
+		if (connect_to_server() < 0) {
+			fprintf(stderr, "[ERROR] Could not connect to the "
+					"destination. Abort!\n");
+		} else {
+			break;
+		}
+	}
+
+	// call the migration handler and exit
+	migration_handler();
 	exit(EXIT_SUCCESS);
 }
 

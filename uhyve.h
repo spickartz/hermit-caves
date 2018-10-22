@@ -110,7 +110,8 @@ typedef struct _migration_metadata migration_metadata_t;
 
 void print_registers(void);
 void timer_handler(int signum);
-void *migration_handler(void *arg);
+void migration_handler(void);
+void *migration_handler_thread(void *arg);
 void restore_cpu_state(vcpu_state_t cpu_state);
 vcpu_state_t read_cpu_state(void);
 vcpu_state_t save_cpu_state(void);

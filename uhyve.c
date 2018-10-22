@@ -829,31 +829,32 @@ int uhyve_loop(int argc, char **argv)
 
 		/* start migration thread; handles SIGUSR1 */
 		pthread_t sig_thr_id;
-		pthread_create (&sig_thr_id, NULL, migration_handler,  (void *)&signal_mask);
+		pthread_create (&sig_thr_id, NULL, migration_handler_thread,  (void *)&signal_mask);
 
 		/* install signal handler for migration */
 		struct sigaction sa;
 		memset(&sa, 0x00, sizeof(sa));
 		sa.sa_handler = &vcpu_thread_mig_handler;
 		sigaction(SIGTHRMIG, &sa, NULL);
-
-		/* install eventfd and semaphore for memory mapping requests */
-		struct kvm_irqfd irqfd = {};
-
-		fprintf(stderr, "[INFO] Creating eventfd for migration "
-				"requests\n");
-		if ((mig_efd = eventfd(0, 0)) < 0) {
-			fprintf(stderr, "[WARNING] Could create the migration "
-					"eventfd - %d (%s).\n",
-					errno,
-					strerror(errno));
-		}
-		irqfd.fd = mig_efd;
-		irqfd.gsi = UHYVE_IRQ_MIGRATION;
-		kvm_ioctl(vmfd, KVM_IRQFD, &irqfd);
-		sem_init(&mig_sem, 0, 0);
 	}
 
+	// install eventfd and semaphore for memory mapping requests
+	// TODO: refactor, this is used for old interface (ENV variables)
+	//       and the uhyve-monitor
+	struct kvm_irqfd irqfd = {};
+
+	fprintf(stderr, "[INFO] Creating eventfd for migration "
+			"requests\n");
+	if ((mig_efd = eventfd(0, 0)) < 0) {
+		fprintf(stderr, "[WARNING] Could create the migration "
+				"eventfd - %d (%s).\n",
+				errno,
+				strerror(errno));
+	}
+	irqfd.fd = mig_efd;
+	irqfd.gsi = UHYVE_IRQ_MIGRATION;
+	kvm_ioctl(vmfd, KVM_IRQFD, &irqfd);
+	sem_init(&mig_sem, 0, 0);
 
 	// First CPU is special because it will boot the system. Other CPUs will
 	// be booted linearily after the first one.

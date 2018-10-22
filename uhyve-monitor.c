@@ -40,6 +40,7 @@
 #include <unistd.h>
 
 #include "uhyve-json.h"
+#include "uhyve-migration.h"
 #include "uhyve-monitor.h"
 #include "uhyve.h"
 
@@ -135,6 +136,8 @@ uhyve_monitor_task_handler(void *task, size_t length)
 {
 	uint32_t status_code = 0;
 
+	printf("%s\n", (char *)task);
+
 	// parse the json task
 	json_value *json_task = json_parse((const json_char *)task, length);
 
@@ -184,7 +187,7 @@ uhyve_monitor_handle_start_app(json_value *json_task)
 	fprintf(stderr, "[INFO] Handling an application start event!\n");
 
 	// find path field
-	json_value *path_json  = NULL;
+	json_value *path_json = NULL;
 	if ((path_json = find_json_field("path", json_task)) == NULL) {
 		fprintf(
 		    stderr,
@@ -227,8 +230,57 @@ uhyve_monitor_handle_load_checkpoint(json_value *json_task)
 static uint32_t
 uhyve_monitor_handle_migrate(json_value *json_task)
 {
-	fprintf(stderr, "[INFO] Handling a migration event!\n");
-	return 501;
+	// find params field
+	json_value *params_json = NULL;
+	if ((params_json = find_json_field("params", json_task)) == NULL) {
+		fprintf(
+		    stderr,
+		    "[ERROR] Migrate task is missing the 'params' field. Abort!\n");
+		return 400;
+	}
+
+	// determine migratin parameters
+	//
+	// destination
+	json_value *mig_param_json = NULL;
+	if ((mig_param_json = find_json_field("destination", params_json)) ==
+	    NULL) {
+		fprintf(
+		    stderr,
+		    "[ERROR] Migrate task is missing the 'destination' parameter. Abort!\n");
+		return 400;
+	} else {
+		set_migration_target(mig_param_json->u.string.ptr,
+				     MIGRATION_PORT);
+	}
+	// mode
+	if ((mig_param_json = find_json_field("mode", params_json)) != NULL) {
+		set_migration_mode(mig_param_json->u.string.ptr);
+	}
+	// type
+	if ((mig_param_json = find_json_field("type", params_json)) != NULL) {
+		set_migration_type(mig_param_json->u.string.ptr);
+	}
+	// odp
+	if ((mig_param_json = find_json_field("use-odp", params_json)) !=
+	    NULL) {
+		set_migration_use_odp(mig_param_json->u.boolean);
+	}
+	// prefetch
+	if ((mig_param_json = find_json_field("prefetch", params_json)) !=
+	    NULL) {
+		set_migration_prefetch(mig_param_json->u.boolean);
+	}
+
+	// connect to the migraiton server and call the handler (arch specific)
+	if (connect_to_server() < 0) {
+		fprintf(stderr,
+			"[ERROR] Could not connect to the destination. Abort!\n");
+		return 500;
+	} else {
+		migration_handler();
+		return 501;
+	}
 }
 
 /**
