@@ -274,8 +274,9 @@ uhyve_monitor_handle_migrate(json_value *json_task)
 
 	// connect to the migraiton server and call the handler (arch specific)
 	if (connect_to_server() < 0) {
-		fprintf(stderr,
-			"[ERROR] Could not connect to the destination. Abort!\n");
+		fprintf(
+		    stderr,
+		    "[ERROR] Could not connect to the destination. Abort!\n");
 		return 500;
 	} else {
 		migration_handler();
