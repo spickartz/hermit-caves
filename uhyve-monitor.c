@@ -88,7 +88,7 @@ static const task_to_handler_elem_t task_to_handler[] = {
 static const int task_to_handler_len =
     sizeof(task_to_handler) / sizeof(task_to_handler[0]);
 
-static int32_t
+static json_value *
 find_json_field(const char *field_name, json_value *json_task)
 {
 	uint32_t i = 0;
@@ -100,10 +100,10 @@ find_json_field(const char *field_name, json_value *json_task)
 		size_t max_n = MIN(entry_name_length, strlen(field_name));
 
 		if (strncmp(entry_name, field_name, max_n) == 0)
-			return i;
+			return json_task->u.object.values[i].value;
 	}
 
-	return -1;
+	return NULL;
 }
 
 static void
@@ -139,8 +139,8 @@ uhyve_monitor_task_handler(void *task, size_t length)
 	json_value *json_task = json_parse((const json_char *)task, length);
 
 	// find task field
-	int32_t task_index = -1;
-	if ((task_index = find_json_field(JSON_TASK_STR, json_task)) < 0) {
+	json_value *task_json = NULL;
+	if ((task_json = find_json_field(JSON_TASK_STR, json_task)) == NULL) {
 		fprintf(
 		    stderr,
 		    "[ERROR] Json string does not contain a '%s' field. Abort!\n",
@@ -149,10 +149,8 @@ uhyve_monitor_task_handler(void *task, size_t length)
 	}
 
 	// determine task
-	const json_char *task_name =
-	    json_task->u.object.values[task_index].value->u.string.ptr;
-	const size_t task_name_length =
-	    json_task->u.object.values[task_index].value->u.string.length;
+	const json_char *task_name        = task_json->u.string.ptr;
+	const size_t     task_name_length = task_json->u.string.length;
 
 	uint32_t i = 0;
 	for (i = 0; i < task_to_handler_len; ++i) {
@@ -186,8 +184,8 @@ uhyve_monitor_handle_start_app(json_value *json_task)
 	fprintf(stderr, "[INFO] Handling an application start event!\n");
 
 	// find path field
-	int32_t path_index = -1;
-	if ((path_index = find_json_field("path", json_task)) < 0) {
+	json_value *path_json  = NULL;
+	if ((path_json = find_json_field("path", json_task)) == NULL) {
 		fprintf(
 		    stderr,
 		    "[ERROR] Start task is missing the 'path' field. Abort!\n");
@@ -195,7 +193,7 @@ uhyve_monitor_handle_start_app(json_value *json_task)
 	}
 
 	// load the given application
-	char *path = json_task->u.object.values[path_index].value->u.string.ptr;
+	char *path = path_json->u.string.ptr;
 	if (load_kernel(guest_mem, path) != 0)
 		exit(EXIT_FAILURE);
 	sem_post(&monitor_sem);
