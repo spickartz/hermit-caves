@@ -830,17 +830,18 @@ int uhyve_loop(int argc, char **argv)
 		/* start migration thread; handles SIGUSR1 */
 		pthread_t sig_thr_id;
 		pthread_create (&sig_thr_id, NULL, migration_handler_thread,  (void *)&signal_mask);
-
-		/* install signal handler for migration */
-		struct sigaction sa;
-		memset(&sa, 0x00, sizeof(sa));
-		sa.sa_handler = &vcpu_thread_mig_handler;
-		sigaction(SIGTHRMIG, &sa, NULL);
 	}
 
+	// TODO: refactor the following code
+	//       this is used for old interface (ENV variables)
+	//       and the uhyve-monitork
+	/* install signal handler for migration */
+	struct sigaction sa;
+	memset(&sa, 0x00, sizeof(sa));
+	sa.sa_handler = &vcpu_thread_mig_handler;
+	sigaction(SIGTHRMIG, &sa, NULL);
+
 	// install eventfd and semaphore for memory mapping requests
-	// TODO: refactor, this is used for old interface (ENV variables)
-	//       and the uhyve-monitor
 	struct kvm_irqfd irqfd = {};
 
 	fprintf(stderr, "[INFO] Creating eventfd for migration "

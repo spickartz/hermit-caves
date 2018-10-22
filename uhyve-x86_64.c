@@ -950,7 +950,8 @@ void migration_handler(void)
 	assert(vcpu_thread_states == NULL);
 	vcpu_thread_states = (vcpu_state_t*)calloc(ncores, sizeof(vcpu_state_t));
 	for(i = 0; i < ncores; i++)
-		pthread_kill(vcpu_threads[i], SIGTHRMIG);
+		if (vcpu_threads[i] != pthread_self())
+			pthread_kill(vcpu_threads[i], SIGTHRMIG);
 	pthread_barrier_wait(&migration_barrier);
 	printf("World\n");
 
