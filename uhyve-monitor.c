@@ -71,7 +71,8 @@ typedef struct uhyve_monitor_event {
 static uhyve_monitor_sock_t  uhyve_monitor_sock;
 static uhyve_monitor_event_t uhyve_monitor_event;
 static pthread_t             uhyve_monitor_thread;
-static uint8_t               uhyve_monitor_initialized = 0;
+static bool                  uhyve_monitor_initialized = 0;
+static bool                  uhyve_monitor_exit        = 0;
 
 typedef uint32_t (*task_handler_t)(json_value *json_task);
 typedef struct _task_to_handler_elem {
@@ -277,10 +278,11 @@ uhyve_monitor_handle_migrate(json_value *json_task)
 		fprintf(
 		    stderr,
 		    "[ERROR] Could not connect to the destination. Abort!\n");
-		return 500;
+		return 502;
 	} else {
 		migration_handler();
-		return 501;
+		uhyve_monitor_exit = true;
+		return 200;
 	}
 }
 
@@ -306,6 +308,10 @@ uhyve_monitor_receive_task(struct bufferevent *bev, void *user_data)
 	if (bufferevent_write(bev, status_code_str, 4) < 0) {
 		err(1, "[ERROR] Could write to the event buffer.");
 	}
+
+	// shall we exit the monitor?
+	if (uhyve_monitor_exit)
+		exit(EXIT_SUCCESS);
 }
 
 /**
