@@ -13,6 +13,7 @@ list(APPEND LIBS "-pthread" "-levent" "-levent_pthreads" "-lm")
 set(SRC proxy.c
 	utils.c
 	uhyve.c
+	uhyve-checkpoint.c
 	uhyve-net.c
 	uhyve-migration.c
 	uhyve-monitor.c

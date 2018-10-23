@@ -1,4 +1,4 @@
-#ifndef __UHYVE_MONITOR_H__
+#ifndef __UHYVE_CHECKPOINT_H__
 /*
  * Copyright (c) 2018, Simon Pickartz, RWTH Aachen University
  * All rights reserved.
@@ -28,11 +28,15 @@
 
 /**
  * @author Simon Pickartz
- * @file tools/uhyve-monitor.h
- * @brief Monitor-related functions
+ * @file uhyve-checkpoint.h
+ * @brief Checkpointing-related functions
  */
 
-#define __UHYVE_MONITOR_H__
-void uhyve_monitor_init(void);
-void uhyve_monitor_destroy(void);
-#endif /* __UHYVE_MONITOR_H__ */
+#define __UHYVE_CHECKPOINT_H__
+
+int32_t load_checkpoint_config(const char *chkpt_config_path);
+void create_checkpoint(char *path);
+int32_t restore_checkpoint(char *path);
+
+void vcpu_thread_chk_handler(int signum);
+#endif /* __UHYVE_CHECKPOINT_H__ */

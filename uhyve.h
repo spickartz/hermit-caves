@@ -30,6 +30,7 @@
 
 #include <err.h>
 #include <linux/kvm.h>
+#include <signal.h>
 
 #define UHYVE_PORT_WRITE		0x400
 #define UHYVE_PORT_OPEN			0x440
@@ -115,10 +116,10 @@ void *migration_handler_thread(void *arg);
 void restore_cpu_state(vcpu_state_t cpu_state);
 vcpu_state_t read_cpu_state(void);
 vcpu_state_t save_cpu_state(void);
-void write_cpu_state(void);
+void write_cpu_state(const char *path);
 void init_cpu_state(uint64_t elf_entry);
 int load_kernel(uint8_t* mem, char* path);
-int load_checkpoint(uint8_t* mem, char* path);
+int load_checkpoint(FILE *f, const bool last_checkpoint);
 int load_migration_data(uint8_t* mem);
 void wait_for_incomming_migration(migration_metadata_t *metadata, uint16_t listen_portno);
 void init_kvm_arch(void);

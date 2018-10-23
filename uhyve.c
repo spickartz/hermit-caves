@@ -64,6 +64,7 @@
 #include <linux/kvm.h>
 
 #include "uhyve.h"
+#include "uhyve-checkpoint.h"
 #include "uhyve-syscalls.h"
 #include "uhyve-migration.h"
 #include "uhyve-monitor.h"
@@ -79,7 +80,7 @@ static pthread_mutex_t kvm_lock = PTHREAD_MUTEX_INITIALIZER;
 
 extern bool verbose;
 
-static char* guest_path = NULL;
+char* guest_path = NULL;
 static bool uhyve_gdb_enabled = false;
 size_t guest_size = 0x20000000ULL;
 bool full_checkpoint = false;
@@ -593,14 +594,6 @@ static int vcpu_init(void)
 	return 0;
 }
 
-static void sigusr_handler(int signum)
-{
-	pthread_barrier_wait(&barrier);
-	write_cpu_state();
-
-	pthread_barrier_wait(&barrier);
-}
-
 static void vcpu_thread_mig_handler(int signum)
 {
 	/* memory should be allocated at this point */
@@ -630,7 +623,7 @@ static void* uhyve_thread(void* arg)
 
 	/* install signal handler for checkpoint */
 	memset(&sa, 0x00, sizeof(sa));
-	sa.sa_handler = &sigusr_handler;
+	sa.sa_handler = &vcpu_thread_chk_handler;
 	sigaction(SIGTHRCHKP, &sa, NULL);
 
 	/* install signal handler for migration */
@@ -690,23 +683,15 @@ int uhyve_init(char *path)
 		guest_size = metadata.guest_size;
 		elf_entry = metadata.elf_entry;
 		full_checkpoint = metadata.full_checkpoint;
-	} else if ((f = fopen("checkpoint/chk_config.txt", "r")) != NULL) {
-		int tmp = 0;
+	} else if (load_checkpoint_config("checkpoint") == 0) {
 		restart = true;
-
-		fscanf(f, "number of cores: %u\n", &ncores);
-		fscanf(f, "memory size: 0x%zx\n", &guest_size);
-		fscanf(f, "checkpoint number: %u\n", &no_checkpoint);
-		fscanf(f, "entry point: 0x%zx", &elf_entry);
-		fscanf(f, "full checkpoint: %d", &tmp);
-		full_checkpoint = tmp ? true : false;
 
 		if (verbose)
 			fprintf(stderr,
-				"Restart from checkpoint %u "
+				"Restart '%s' from checkpoint %u "
 				"(ncores %d, mem size 0x%zx)\n",
+				guest_path,
 				no_checkpoint, ncores, guest_size);
-		fclose(f);
 	} else {
 		const char* hermit_memory = getenv("HERMIT_MEM");
 		if (hermit_memory)
@@ -745,7 +730,7 @@ int uhyve_init(char *path)
 	// TODO: revise start-up logic
 	init_kvm_arch();
 	if (restart) {
-		if (load_checkpoint(guest_mem, path) != 0)
+		if (restore_checkpoint("checkpoint") != 0)
 			exit(EXIT_FAILURE);
 	} else if (start_mig_server) {
 		load_migration_data(guest_mem);
