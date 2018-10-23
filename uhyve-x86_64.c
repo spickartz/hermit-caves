@@ -945,7 +945,6 @@ void migration_handler(void)
 	/* pre-copy phase */
 	precopy_phase(guest_physical_memory, mem_mappings);
 
-	printf("HELLOOOOO\n");
 	/* synchronize VCPU threads */
 	assert(vcpu_thread_states == NULL);
 	vcpu_thread_states = (vcpu_state_t*)calloc(ncores, sizeof(vcpu_state_t));
@@ -953,7 +952,6 @@ void migration_handler(void)
 		if (vcpu_threads[i] != pthread_self())
 			pthread_kill(vcpu_threads[i], SIGTHRMIG);
 	pthread_barrier_wait(&migration_barrier);
-	printf("World\n");
 
 	/* send the final dump */
 	stop_and_copy_phase();
