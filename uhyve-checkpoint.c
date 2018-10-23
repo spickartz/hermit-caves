@@ -1,5 +1,7 @@
 /*
- * Copyright (c) 2018, Simon Pickartz, RWTH Aachen University
+ * Copyright (c) 2018, RWTH Aachen University
+ * Author(s): Stefan Lankes <slankes@eonerc.rwth-aachen.de>
+ *            Simon Pickartz <spickartz@eonerc.rwth-aachen.de>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
