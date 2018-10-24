@@ -748,7 +748,7 @@ uhyve_init(char *path)
 
 #ifdef __x86_64__
 	// the monitor takes care of initializing kvm
-	if (!start_uhyve_monitor)
+	if (!start_uhyve_monitor || (path != NULL))
 		init_kvm_arch();
 
 	// TODO: revise start-up logic

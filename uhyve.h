@@ -58,8 +58,9 @@
 #define UHYVE_IRQ_NET             (UHYVE_IRQ_BASE+0)
 #define UHYVE_IRQ_MIGRATION       (UHYVE_IRQ_BASE+1)
 
-#define SIGTHRCHKP 	(SIGRTMIN+0)
-#define SIGTHRMIG 	(SIGRTMIN+1)
+#define SIGCHKP 	(SIGRTMIN+0)
+#define SIGTHRCHKP 	(SIGRTMIN+1)
+#define SIGTHRMIG 	(SIGRTMIN+2)
 
 #define kvm_ioctl(fd, cmd, arg) ({ \
         const int ret = ioctl(fd, cmd, arg); \

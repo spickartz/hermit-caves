@@ -36,8 +36,10 @@
 
 #define __UHYVE_CHECKPOINT_H__
 
+#include <stdbool.h>
+
 int32_t load_checkpoint_config(const char *chkpt_config_path);
-void create_checkpoint(char *path);
+void create_checkpoint(char *path, bool full_checkpoint);
 int32_t restore_checkpoint(char *path);
 
 void vcpu_thread_chk_handler(int signum);

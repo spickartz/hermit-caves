@@ -39,6 +39,7 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#include "uhyve-checkpoint.h"
 #include "uhyve-json.h"
 #include "uhyve-migration.h"
 #include "uhyve-monitor.h"
@@ -53,8 +54,10 @@ static uint32_t uhyve_monitor_handle_create_checkpoint(json_value *json_task);
 static uint32_t uhyve_monitor_handle_load_checkpoint(json_value *json_task);
 static uint32_t uhyve_monitor_handle_migrate(json_value *json_task);
 
-extern uint8_t *guest_mem;
-extern sem_t    monitor_sem;
+extern uint8_t *  guest_mem;
+extern uint32_t   ncores;
+extern sem_t      monitor_sem;
+extern pthread_t *vcpu_threads;
 
 typedef struct uhyve_monitor_sock {
 	struct evconnlistener *listener;
@@ -73,6 +76,12 @@ static uhyve_monitor_event_t uhyve_monitor_event;
 static pthread_t             uhyve_monitor_thread;
 static bool                  uhyve_monitor_initialized = 0;
 static bool                  uhyve_monitor_exit        = 0;
+
+// these globals are required for the checkpoint handler
+// TODO: this is a workaround (see comment in uhyve_monitor_init()
+static bool  full_checkpoint = false;
+static char *chk_path        = NULL;
+static sem_t chk_sem;
 
 typedef uint32_t (*task_handler_t)(json_value *json_task);
 typedef struct _task_to_handler_elem {
@@ -118,6 +127,13 @@ uhyve_monitor_on_conn_event(struct bufferevent *bev, short events,
 	} else if (events & BEV_EVENT_ERROR) {
 		perror("Got an error on the connection");
 	}
+}
+
+static void
+uhyve_monitor_checkpoint_handler(int signum)
+{
+	create_checkpoint(chk_path, full_checkpoint);
+	sem_post(&chk_sem);
 }
 
 /**
@@ -225,9 +241,7 @@ uhyve_monitor_handle_create_checkpoint(json_value *json_task)
 
 	// determine checkpoint parameters
 	//
-	bool        full_checkpoint = false;
-	char *      chk_path        = NULL;
-	json_value *chk_param_json  = NULL;
+	json_value *chk_param_json = NULL;
 	// path
 	if ((chk_param_json = find_json_field("path", params_json)) == NULL) {
 		fprintf(
@@ -244,7 +258,9 @@ uhyve_monitor_handle_create_checkpoint(json_value *json_task)
 	}
 
 	// create the checkpoint
-	create_checkpoint(chk_path, full_checkpoint);
+	// TODO: this is a workaround (see comment in uhyve_monitor_init()
+	pthread_kill(vcpu_threads[0], SIGCHKP);
+	sem_wait(&chk_sem);
 
 	return 200;
 }
@@ -265,7 +281,7 @@ uhyve_monitor_handle_load_checkpoint(json_value *json_task)
 	}
 
 	// load the checkpoint configuration
-	const char *chk_path = path_json->u.string.ptr;
+	char *chk_path = path_json->u.string.ptr;
 	if (load_checkpoint_config(chk_path) < 0) {
 		fprintf(
 		    stderr,
@@ -285,6 +301,7 @@ uhyve_monitor_handle_load_checkpoint(json_value *json_task)
 	// initialize the hypervisor and restore the checkpoint image
 	init_kvm_arch();
 	restore_checkpoint(chk_path);
+	sem_post(&monitor_sem);
 
 	return 200;
 }
@@ -451,6 +468,15 @@ uhyve_monitor_init(void)
 		return;
 
 	fprintf(stderr, "[INFO] Initializing the uhyve monitor ...\n");
+
+	// install the signal handler for checkpointing
+	// TODO: enable 'live' checkpointing and avoid the interrruption of the
+	//       main thread
+	struct sigaction sa;
+	memset(&sa, 0x00, sizeof(sa));
+	sa.sa_handler = &uhyve_monitor_checkpoint_handler;
+	sigaction(SIGCHKP, &sa, NULL);
+	sem_init(&chk_sem, 0, 0);
 
 	// setup libevent to suppor threading
 	if (evthread_use_pthreads() < 0) {
