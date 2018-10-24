@@ -808,7 +808,7 @@ void determine_dirty_pages(void (*save_page_handler)(void*, size_t, void*, size_
 
 void timer_handler(int signum)
 {
-	create_checkpoint("checkpoint");
+	create_checkpoint("checkpoint", full_checkpoint);
 }
 
 /** \brief The migration handler

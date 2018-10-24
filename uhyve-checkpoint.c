@@ -165,11 +165,13 @@ vcpu_thread_chk_handler(int signum)
  * \brief Create a checkpoint
  *
  * \param path The directory where the checkpoint should be stored
+ * \param full_checkpoint Make a complete dump of the guest memory
  *
  * This function actually creates a checkpoint and writes it to the hard disk.
+ * TODO: determine checkpoint number from given directory
  */
 void
-create_checkpoint(char *path)
+create_checkpoint(char *path, bool full_checkpoint)
 {
 	struct stat    st = {0};
 	struct timeval begin, end;

@@ -129,4 +129,6 @@ void determine_dirty_pages(void (*save_page_handler)(void*, size_t, void*, size_
 void determine_mem_mappings(free_list_t *alloc_list);
 void virt_to_phys(const size_t virtual_address, size_t* const physical_address, size_t* const physical_address_page_end);
 
+
+int uhyve_allocate_vcpus(uint32_t ncores);
 #endif

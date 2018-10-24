@@ -196,6 +196,9 @@ uhyve_monitor_handle_start_app(json_value *json_task)
 		return 400;
 	}
 
+	// initialize the hypervisor
+	init_kvm_arch();
+
 	// load the given application
 	char *path = path_json->u.string.ptr;
 	if (load_kernel(guest_mem, path) != 0)
@@ -211,8 +214,39 @@ uhyve_monitor_handle_start_app(json_value *json_task)
 static uint32_t
 uhyve_monitor_handle_create_checkpoint(json_value *json_task)
 {
-	fprintf(stderr, "[INFO] Handling a checkpoint event!\n");
-	return 501;
+	// find params field
+	json_value *params_json = NULL;
+	if ((params_json = find_json_field("params", json_task)) == NULL) {
+		fprintf(
+		    stderr,
+		    "[ERROR] Checkpoint task is missing the 'params' field. Abort!\n");
+		return 400;
+	}
+
+	// determine checkpoint parameters
+	//
+	bool        full_checkpoint = false;
+	char *      chk_path        = NULL;
+	json_value *chk_param_json  = NULL;
+	// path
+	if ((chk_param_json = find_json_field("path", params_json)) == NULL) {
+		fprintf(
+		    stderr,
+		    "[ERROR] Checkpoint task is missing the 'path' parameter. Abort!\n");
+		return 400;
+	} else {
+		chk_path = chk_param_json->u.string.ptr;
+	}
+	// full-checkpoint
+	if ((chk_param_json =
+		 find_json_field("full-checkpoint", params_json)) != NULL) {
+		full_checkpoint = chk_param_json->u.boolean;
+	}
+
+	// create the checkpoint
+	create_checkpoint(chk_path, full_checkpoint);
+
+	return 200;
 }
 
 /**
@@ -221,8 +255,38 @@ uhyve_monitor_handle_create_checkpoint(json_value *json_task)
 static uint32_t
 uhyve_monitor_handle_load_checkpoint(json_value *json_task)
 {
-	fprintf(stderr, "[INFO] Handling a restore event!\n");
-	return 501;
+	// find path field
+	json_value *path_json = NULL;
+	if ((path_json = find_json_field("path", json_task)) == NULL) {
+		fprintf(
+		    stderr,
+		    "[ERROR] Checkpoint task is missing the 'path' field. Abort!\n");
+		return 400;
+	}
+
+	// load the checkpoint configuration
+	const char *chk_path = path_json->u.string.ptr;
+	if (load_checkpoint_config(chk_path) < 0) {
+		fprintf(
+		    stderr,
+		    "[ERROR] Could not load the chk_config.txt within '%s'. Abort!\n",
+		    chk_path);
+		return 400;
+	}
+
+	// allocate VCPU data structures
+	if (uhyve_allocate_vcpus(ncores) < 0) {
+		fprintf(
+		    stderr,
+		    "[ERROR] Could not allocate VCPU data structures. Abort!\n");
+		return 500;
+	}
+
+	// initialize the hypervisor and restore the checkpoint image
+	init_kvm_arch();
+	restore_checkpoint(chk_path);
+
+	return 200;
 }
 
 /**

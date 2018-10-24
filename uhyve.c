@@ -649,9 +649,32 @@ void sigterm_handler(int signum)
 	pthread_exit(0);
 }
 
-int uhyve_init(char *path)
+
+// TODO: support dynamic adaptations during runtime
+int
+uhyve_allocate_vcpus(uint32_t ncores)
 {
-	FILE *f = NULL;
+	if (vcpu_threads)
+		free(vcpu_threads);
+
+	vcpu_threads = (pthread_t *)calloc(ncores, sizeof(pthread_t));
+	if (!vcpu_threads)
+		return -1;
+
+	if (vcpu_fds)
+		free(vcpu_fds);
+
+	vcpu_fds = (int *)calloc(ncores, sizeof(int));
+	if (!vcpu_fds)
+		return -1;
+
+	return 0;
+}
+
+int
+uhyve_init(char *path)
+{
+	FILE *f    = NULL;
 	guest_path = path;
 
 	signal(SIGTERM, sigterm_handler);
@@ -706,13 +729,10 @@ int uhyve_init(char *path)
 			full_checkpoint = true;
 	}
 
-	vcpu_threads = (pthread_t*) calloc(ncores, sizeof(pthread_t));
-	if (!vcpu_threads)
-		err(1, "Not enough memory");
-
-	vcpu_fds = (int*) calloc(ncores, sizeof(int));
-	if (!vcpu_fds)
-		err(1, "Not enough memory");
+	if (uhyve_allocate_vcpus(ncores) < 0) {
+		fprintf(stderr, "[ERROR] Could not allocate memory for VCPU data structures. Abort!");
+		exit(EXIT_FAILURE);
+	}
 
 	kvm = open("/dev/kvm", O_RDWR | O_CLOEXEC);
 	if (kvm < 0)
@@ -727,8 +747,11 @@ int uhyve_init(char *path)
 	vmfd = kvm_ioctl(kvm, KVM_CREATE_VM, 0);
 
 #ifdef __x86_64__
+	// the monitor takes care of initializing kvm
+	if (!start_uhyve_monitor)
+		init_kvm_arch();
+
 	// TODO: revise start-up logic
-	init_kvm_arch();
 	if (restart) {
 		if (restore_checkpoint("checkpoint") != 0)
 			exit(EXIT_FAILURE);
